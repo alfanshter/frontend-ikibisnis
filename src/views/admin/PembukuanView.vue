@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
-import { Plus, TrendingUp, TrendingDown, DollarSign, X, ChevronDown, Loader2 } from '@lucide/vue'
+import { Plus, TrendingUp, TrendingDown, DollarSign, X, ChevronDown, Loader2, Pencil, Trash2 } from '@lucide/vue'
 import { useTransactionsStore } from '@/stores/transactions'
+import { leadsApi, type LeadResponse } from '@/services/api'
 
 // ─── Store ─────────────────────────────────────────────────────────────────
 const store = useTransactionsStore()
@@ -11,6 +12,7 @@ onMounted(async () => {
   await Promise.all([
     store.fetchStats(),
     store.fetchTransactions(),
+    loadLeads(),
   ])
 })
 
@@ -74,13 +76,35 @@ function formatRp(val: number) {
 }
 
 // ─── Modal ─────────────────────────────────────────────────────────────────
-const showModal   = ref(false)
+const showModal      = ref(false)
 const isDropdownOpen = ref(false)
-const saving = ref(false)
+const saving         = ref(false)
+const isEditMode     = ref(false)
+const editingId      = ref<number | null>(null)
 
-const proyekOptions = [
-  'PWS-2024-031', 'PWS-2024-032', 'PWS-2024-033', 'PWS-2024-034', 'PWS-2024-035',
-]
+// ─── CRM Lead Options (from API) ──────────────────────────────────────────
+const leadList        = ref<LeadResponse[]>([])
+const leadListLoading = ref(false)
+
+async function loadLeads() {
+  leadListLoading.value = true
+  try {
+    const res = await leadsApi.list({ page: 1 })
+    leadList.value = res.data
+    const last = res.meta?.last_page || 1
+    if (last > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: last - 1 }, (_, i) => leadsApi.list({ page: i + 2 }))
+      )
+      rest.forEach(r => leadList.value.push(...r.data))
+    }
+  } catch (e) {
+    console.error('Gagal memuat daftar CRM leads', e)
+  } finally {
+    leadListLoading.value = false
+  }
+}
+
 const categories = ['Pembayaran Client', 'Material', 'Fee Tim', 'Operasional', 'Lain-lain']
 
 const emptyForm = () => ({
@@ -93,59 +117,140 @@ const emptyForm = () => ({
 })
 const form = ref(emptyForm())
 
-const openModal  = () => { form.value = emptyForm(); searchProyekText.value = ''; showModal.value = true }
+const openModal = () => {
+  isEditMode.value = false
+  editingId.value = null
+  form.value = emptyForm()
+  searchLeadText.value = ''
+  showModal.value = true
+}
+
+const openEditModal = (tx: { id: number; type: string; name: string; date: string; category: string | null; proyekId: string | null; amount: number }) => {
+  isEditMode.value = true
+  editingId.value = tx.id
+  // Reconstruct display label from stored CRM ref
+  const matchedLead = leadList.value.find(l => (l.kode_lead || `LEAD-${l.id}`) === tx.proyekId)
+  const displayLabel = matchedLead
+    ? `${matchedLead.kode_lead || 'CRM'} – ${matchedLead.nama}`
+    : (tx.proyekId || '')
+  form.value = {
+    type: tx.type,
+    name: tx.name,
+    date: tx.date,
+    category: tx.category || 'Pembayaran Client',
+    proyekId: tx.proyekId || '',
+    amount: String(tx.amount),
+  }
+  searchLeadText.value = displayLabel
+  showModal.value = true
+}
+
 const closeModal = () => { showModal.value = false; isDropdownOpen.value = false; store.error = null }
 
-const searchProyekText = ref('')
-const filteredProyekOptions = computed(() => {
-  const q = searchProyekText.value.toLowerCase()
-  if (!q || q === form.value.proyekId.toLowerCase()) return proyekOptions
-  return proyekOptions.filter(p => p.toLowerCase().includes(q))
+// Helper: get stored key for a lead
+const leadKey = (l: LeadResponse) => l.kode_lead || `LEAD-${l.id}`
+// Helper: get display label for a lead
+const leadLabel = (l: LeadResponse) => `${l.kode_lead || ('LEAD-' + l.id)} – ${l.nama}`
+
+const searchLeadText = ref('')
+const filteredLeadOptions = computed(() => {
+  const q = searchLeadText.value.toLowerCase().trim()
+  if (!q) return leadList.value
+  return leadList.value.filter(l =>
+    (l.kode_lead || '').toLowerCase().includes(q) ||
+    l.nama.toLowerCase().includes(q) ||
+    l.perusahaan.toLowerCase().includes(q) ||
+    l.status.toLowerCase().includes(q)
+  )
 })
 
-const selectProyek = (p: string) => {
-  form.value.proyekId = p
-  searchProyekText.value = p
+const selectLead = (l: LeadResponse | null) => {
+  if (!l) {
+    form.value.proyekId = ''
+    searchLeadText.value = ''
+  } else {
+    form.value.proyekId = leadKey(l)
+    searchLeadText.value = leadLabel(l)
+  }
   isDropdownOpen.value = false
 }
 
-const onProyekBlur = () => {
+const onLeadBlur = () => {
   setTimeout(() => {
     isDropdownOpen.value = false
-    if (form.value.proyekId !== searchProyekText.value) {
-      if (searchProyekText.value.trim() === '') {
-        form.value.proyekId = ''
-        searchProyekText.value = ''
-      } else if (proyekOptions.includes(searchProyekText.value)) {
-        form.value.proyekId = searchProyekText.value
-      } else {
-        searchProyekText.value = form.value.proyekId
-      }
+    if (searchLeadText.value.trim() === '') {
+      form.value.proyekId = ''
+    }
+    if (form.value.proyekId) {
+      const matched = leadList.value.find(l => leadKey(l) === form.value.proyekId)
+      if (matched) searchLeadText.value = leadLabel(matched)
     }
   }, 150)
 }
 
-watch(() => form.value.proyekId, (val) => {
-  searchProyekText.value = val
-})
+// Status color map for badge
+const statusColor: Record<string, string> = {
+  'Prospek':   '#6366f1',
+  'Survey':    '#f59e0b',
+  'Penawaran': '#3b82f6',
+  'Deal':      '#10b981',
+  'Pending':   '#8b5cf6',
+  'Batal':     '#6b7280',
+}
 
 const submitForm = async () => {
   if (!form.value.name || !form.value.amount) return
   saving.value = true
   try {
-    await store.addTransaction({
+    const payload = {
       type: form.value.type,
       name: form.value.name,
       date: form.value.date,
       category: form.value.category,
       proyekId: form.value.proyekId,
       amount: Number(String(form.value.amount).replace(/\D/g, '')),
-    })
+    }
+    if (isEditMode.value && editingId.value !== null) {
+      await store.updateTransaction(editingId.value, payload)
+    } else {
+      await store.addTransaction(payload)
+    }
     closeModal()
   } catch (e) {
     // error is handled in store
   } finally {
     saving.value = false
+  }
+}
+
+// ─── Delete Confirmation ────────────────────────────────────────────────────
+const showDeleteModal  = ref(false)
+const deletingId       = ref<number | null>(null)
+const deletingName     = ref('')
+const deleting         = ref(false)
+
+const confirmDelete = (tx: { id: number; name: string }) => {
+  deletingId.value   = tx.id
+  deletingName.value = tx.name
+  showDeleteModal.value = true
+}
+
+const cancelDelete = () => {
+  showDeleteModal.value = false
+  deletingId.value = null
+  deletingName.value = ''
+}
+
+const executeDelete = async () => {
+  if (deletingId.value === null) return
+  deleting.value = true
+  try {
+    await store.deleteTransaction(deletingId.value)
+    cancelDelete()
+  } catch (e) {
+    // error handled in store
+  } finally {
+    deleting.value = false
   }
 }
 </script>
@@ -317,6 +422,16 @@ const submitForm = async () => {
             <div class="tx-amount" :class="tx.type === 'masuk' ? 'tx-amount-masuk' : 'tx-amount-keluar'">
               {{ tx.type === 'masuk' ? '+' : '-' }}{{ formatRp(tx.amount) }}
             </div>
+
+            <!-- Actions -->
+            <div class="tx-actions">
+              <button class="tx-action-btn tx-action-edit" @click.stop="openEditModal(tx)" title="Edit transaksi">
+                <Pencil :size="13" />
+              </button>
+              <button class="tx-action-btn tx-action-delete" @click.stop="confirmDelete(tx)" title="Hapus transaksi">
+                <Trash2 :size="13" />
+              </button>
+            </div>
           </div>
 
           <div v-if="filteredTx.length === 0" class="tx-empty">
@@ -351,7 +466,7 @@ const submitForm = async () => {
       <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
         <div class="modal-box">
           <div class="modal-header">
-            <h2>Tambah Transaksi</h2>
+            <h2>{{ isEditMode ? 'Edit Transaksi' : 'Tambah Transaksi' }}</h2>
             <button class="modal-close" @click="closeModal"><X :size="16" /></button>
           </div>
 
@@ -401,37 +516,53 @@ const submitForm = async () => {
                 </select>
               </div>
               <div class="form-field">
-                <label class="form-label">ID Proyek <span style="color: var(--text-muted); font-weight: 400; font-size: 11px;">(Opsional)</span></label>
+                <label class="form-label">CRM Lead <span style="color: var(--text-muted); font-weight: 400; font-size: 11px;">(Opsional)</span></label>
                 <div class="custom-combo-box">
                   <input
-                    v-model="searchProyekText"
+                    v-model="searchLeadText"
                     class="form-input combo-input"
-                    placeholder="Pilih atau cari ID proyek..."
+                    placeholder="Cari nama, perusahaan, atau status CRM..."
                     @focus="isDropdownOpen = true"
-                    @blur="onProyekBlur"
+                    @blur="onLeadBlur"
+                    @input="isDropdownOpen = true"
                   />
-                  <ChevronDown class="combo-icon" :size="14" />
-                  
-                  <div v-if="isDropdownOpen" class="combo-dropdown">
+                  <Loader2 v-if="leadListLoading" class="combo-icon spinner" :size="14" />
+                  <ChevronDown v-else class="combo-icon" :size="14" />
+
+                  <div v-if="isDropdownOpen" class="combo-dropdown combo-dropdown-lead">
                     <ul class="combo-list">
+                      <!-- None option -->
                       <li
-                        class="combo-item"
+                        class="combo-item combo-item-none"
                         :class="{ 'combo-item-active': form.proyekId === '' }"
-                        @mousedown.prevent="selectProyek('')"
+                        @mousedown.prevent="selectLead(null)"
                       >
-                        — Tidak ada (Tanpa Proyek) —
+                        <span class="combo-none-label">— Tidak terkait CRM —</span>
                       </li>
+
+                      <!-- Lead items -->
                       <li
-                        v-for="p in filteredProyekOptions"
-                        :key="p"
-                        class="combo-item"
-                        :class="{ 'combo-item-active': form.proyekId === p }"
-                        @mousedown.prevent="selectProyek(p)"
+                        v-for="l in filteredLeadOptions"
+                        :key="l.id"
+                        class="combo-item combo-item-lead"
+                        :class="{ 'combo-item-active': form.proyekId === leadKey(l) }"
+                        @mousedown.prevent="selectLead(l)"
                       >
-                        {{ p }}
+                        <div class="combo-lead-top">
+                          <span class="combo-lead-kode">{{ l.kode_lead || ('LEAD-' + l.id) }}</span>
+                          <span class="combo-lead-badge" :style="{ background: statusColor[l.status] + '22', color: statusColor[l.status] }">
+                            {{ l.status }}
+                          </span>
+                        </div>
+                        <div class="combo-lead-nama">{{ l.nama }}</div>
+                        <div class="combo-lead-perusahaan" v-if="l.perusahaan">{{ l.perusahaan }}</div>
                       </li>
-                      <li v-if="filteredProyekOptions.length === 0" class="combo-empty">
-                        Tidak ditemukan
+
+                      <li v-if="filteredLeadOptions.length === 0 && !leadListLoading" class="combo-empty">
+                        CRM lead tidak ditemukan
+                      </li>
+                      <li v-if="leadListLoading" class="combo-empty">
+                        <Loader2 :size="13" class="spinner" style="margin-right:6px;" /> Memuat leads...
                       </li>
                     </ul>
                   </div>
@@ -456,7 +587,37 @@ const submitForm = async () => {
             <button class="btn-ghost btn-half" @click="closeModal" :disabled="saving">Batal</button>
             <button class="btn-primary btn-half" @click="submitForm" :disabled="saving" style="display: flex; align-items: center; justify-content: center; gap: 8px;">
               <Loader2 v-if="saving" :size="16" class="spinner" />
-              <span>Simpan</span>
+              <span>{{ isEditMode ? 'Simpan Perubahan' : 'Simpan' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ── Modal Konfirmasi Hapus ────────────────────────────────── -->
+    <Teleport to="body">
+      <div v-if="showDeleteModal" class="modal-overlay" @click.self="cancelDelete">
+        <div class="modal-box modal-box-sm">
+          <div class="modal-header delete-modal-header">
+            <div class="delete-icon-wrap">
+              <Trash2 :size="20" />
+            </div>
+            <button class="modal-close" @click="cancelDelete"><X :size="16" /></button>
+          </div>
+          <div class="delete-modal-body">
+            <h3 class="delete-modal-title">Hapus Transaksi?</h3>
+            <p class="delete-modal-desc">
+              Transaksi <strong>"{{ deletingName }}"</strong> akan dihapus secara permanen dan tidak dapat dikembalikan.
+            </p>
+            <div v-if="store.error" class="error-alert" style="margin-top: 12px;">
+              {{ store.error }}
+            </div>
+          </div>
+          <div class="modal-footer modal-footer-split">
+            <button class="btn-ghost btn-half" @click="cancelDelete" :disabled="deleting">Batal</button>
+            <button class="btn-danger btn-half" @click="executeDelete" :disabled="deleting" style="display: flex; align-items: center; justify-content: center; gap: 8px;">
+              <Loader2 v-if="deleting" :size="16" class="spinner" />
+              <span>Hapus</span>
             </button>
           </div>
         </div>
@@ -806,6 +967,64 @@ const submitForm = async () => {
   color: var(--text-muted);
   text-align: center;
   font-style: italic;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── CRM Lead combo item layout ── */
+.combo-dropdown-lead {
+  max-height: 260px;
+}
+.combo-item-lead {
+  padding: 9px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.combo-lead-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.combo-lead-kode {
+  font-family: 'Courier New', monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent-blue);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.combo-item-active .combo-lead-kode {
+  color: var(--accent-orange);
+}
+.combo-lead-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 99px;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+.combo-lead-nama {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-lead-perusahaan {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-none-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 /* ── Utilities ────────────────────────── */
@@ -850,4 +1069,98 @@ const submitForm = async () => {
 .page-btn:hover:not(:disabled) { border-color: var(--accent-orange); color: var(--accent-orange); }
 .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .page-info { font-weight: 600; }
+
+/* ── Transaction Action Buttons ─────── */
+.tx-actions {
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  flex-shrink: 0;
+}
+.tx-row:hover .tx-actions {
+  opacity: 1;
+}
+.tx-action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+.tx-action-edit:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.08);
+}
+.tx-action-delete:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+/* ── Delete Confirmation Modal ──────── */
+.modal-box-sm {
+  max-width: 420px;
+}
+.delete-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.delete-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.delete-modal-body {
+  padding: 4px 0 8px;
+}
+.delete-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+.delete-modal-desc {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+.btn-danger {
+  flex: 1;
+  padding: 10px 20px;
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  background: #ef4444;
+  color: #fff;
+  transition: all var(--transition-fast);
+  font-family: 'Inter', sans-serif;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #dc2626;
+}
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 </style>

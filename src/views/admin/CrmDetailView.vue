@@ -7,7 +7,7 @@ import {
   User, Pencil, Rocket, MessageSquare, Mail, Share2,
   UserCircle, CheckCircle2, FileText, Calendar, LogIn,
   Video, Sliders, Gauge, MapPin, Building2, ChevronRight, Plus, X, Save, ExternalLink,
-  ClipboardList, Activity, Clock, FileBadge2
+  ClipboardList, Activity, Clock, FileBadge2, Repeat, Shield, Globe, Users, Trash2
 } from '@lucide/vue'
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
 import { getWaLink } from '@/utils/whatsapp'
@@ -15,11 +15,13 @@ import {
   leadsApi,
   leadActivitiesApi,
   usersApi,
+  rolesApi,
   auditLogsApi,
   proyeksApi,
   type LeadResponse,
   type LeadActivityResponse,
   type UserResponse,
+  type RoleResponse,
   type AuditLogResponse,
   type LeadStatus,
   type LeadSumber,
@@ -126,6 +128,11 @@ onMounted(() => {
   usersApi.list().then(res => {
     usersList.value = res.data
   }).catch(() => {})
+
+  // Load roles for role access management
+  rolesApi.list().then(res => {
+    rolesList.value = res.data
+  }).catch(() => {})
 })
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -158,26 +165,45 @@ const formatNotesWithLinks = (text: string | null | undefined): string => {
 
 const goBack = () => router.push('/admin/crm')
 
+const addMonthsToDate = (dateStr: string, months: number) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  d.setMonth(d.getMonth() + months)
+  return d.toISOString().slice(0, 10)
+}
+
 // ─── Edit Handlers ────────────────────────────────────────────────────────────
 const startEdit = () => {
   if (!lead.value) return
   draft.value = {
-    nama:        lead.value.nama,
-    perusahaan:  lead.value.perusahaan,
-    status:      lead.value.status,
-    sumber:      lead.value.sumber,
-    pic_id:      lead.value.pic_id,
-    phone:       lead.value.phone ?? '',
-    email:       lead.value.email ?? '',
-    notes:       lead.value.catatan ?? '',
-    tipe_proyek: lead.value.tipe_proyek ?? '',
-    skala:       lead.value.skala ?? '',
-    intensitas:  lead.value.intensitas ?? '',
-    estimasi:    lead.value.estimasi,
-    lokasi:      lead.value.lokasi ?? '',
+    nama:              lead.value.nama,
+    perusahaan:        lead.value.perusahaan,
+    status:            lead.value.status,
+    sumber:            lead.value.sumber,
+    pic_id:            lead.value.pic_id,
+    phone:             lead.value.phone ?? '',
+    email:             lead.value.email ?? '',
+    notes:             lead.value.catatan ?? '',
+    tipe_proyek:       lead.value.tipe_proyek ?? '',
+    skala:             lead.value.skala ?? '',
+    intensitas:        lead.value.intensitas ?? '',
+    estimasi:          lead.value.estimasi,
+    lokasi:            lead.value.lokasi ?? '',
+    tipe_kontrak:      lead.value.tipe_kontrak ?? 'Langsung',
+    sewa_durasi_bulan: lead.value.sewa_durasi_bulan ?? 12,
+    skema_pembayaran:  lead.value.skema_pembayaran ?? 'Bulanan',
+    sewa_mulai:        lead.value.sewa_mulai ?? lead.value.tanggal,
+    sewa_selesai:      lead.value.sewa_selesai ?? addMonthsToDate(lead.value.tanggal, lead.value.sewa_durasi_bulan ?? 12),
   }
   saveError.value = null
   isEditing.value = true
+}
+
+const onDraftDurasiChange = (months: number) => {
+  draft.value.sewa_durasi_bulan = months
+  if (draft.value.sewa_mulai) {
+    draft.value.sewa_selesai = addMonthsToDate(draft.value.sewa_mulai, months)
+  }
 }
 
 const cancelEdit = () => {
@@ -192,20 +218,31 @@ const saveEdit = async () => {
   saving.value = true
   saveError.value = null
   try {
+    const isSewa = draft.value.tipe_kontrak === 'Sewa'
+    const durasi = isSewa ? Number(draft.value.sewa_durasi_bulan || 12) : undefined
+    const estimasiVal = draft.value.estimasi ? Number(draft.value.estimasi) : null
+    const nominalPerBln = (isSewa && estimasiVal && durasi) ? Math.round(estimasiVal / durasi) : undefined
+
     const payload = {
-      nama:        draft.value.nama,
-      perusahaan:  draft.value.perusahaan,
-      status:      draft.value.status,
-      sumber:      draft.value.sumber,
-      pic_id:      draft.value.pic_id,
-      phone:       draft.value.phone,
-      email:       draft.value.email,
-      catatan:     draft.value.notes,
-      tipe_proyek: draft.value.tipe_proyek,
-      skala:       draft.value.skala,
-      intensitas:  draft.value.intensitas,
-      estimasi:    draft.value.estimasi ? Number(draft.value.estimasi) : null,
-      lokasi:      draft.value.lokasi,
+      nama:              draft.value.nama,
+      perusahaan:        draft.value.perusahaan,
+      status:            draft.value.status,
+      sumber:            draft.value.sumber,
+      pic_id:            draft.value.pic_id,
+      phone:             draft.value.phone,
+      email:             draft.value.email,
+      catatan:           draft.value.notes,
+      tipe_proyek:       draft.value.tipe_proyek,
+      skala:             draft.value.skala,
+      intensitas:        draft.value.intensitas,
+      estimasi:          estimasiVal,
+      lokasi:            draft.value.lokasi,
+      tipe_kontrak:      draft.value.tipe_kontrak,
+      sewa_durasi_bulan: durasi,
+      skema_pembayaran:  isSewa ? draft.value.skema_pembayaran : undefined,
+      sewa_mulai:        isSewa ? draft.value.sewa_mulai : undefined,
+      sewa_selesai:      isSewa ? draft.value.sewa_selesai : undefined,
+      nominal_per_bulan: nominalPerBln,
     }
     const res = await leadsApi.update(leadId, payload)
     lead.value = res.data
@@ -218,31 +255,120 @@ const saveEdit = async () => {
   }
 }
 
-// ── Convert to Proyek ──
-const isConverting = ref(false)
-const jadikanProyek = async () => {
+// ── Convert to Proyek with Access Control ──
+const rolesList        = ref<RoleResponse[]>([])
+const showConvertModal = ref(false)
+const isConverting     = ref(false)
+const convertError     = ref<string | null>(null)
+const newMemberUserId  = ref<number | null>(null)
+const newMemberRole    = ref('Teknisi Lapangan')
+
+const convertForm = ref({
+  nama: '',
+  pic_id: null as number | null,
+  akses_tipe: 'personal' as 'personal' | 'role' | 'semua',
+  allowed_roles: [] as string[],
+  assigned_team: [] as Array<{ user_id: number | null; nama: string; role: string }>,
+})
+
+const openConvertModal = () => {
   if (!lead.value) return
-  if (!confirm(`Konfirmasi: Jadikan lead "${lead.value.nama}" sebagai Proyek baru?`)) return
+  convertForm.value.nama = `Proyek - ${lead.value.perusahaan || lead.value.nama}`
+  convertForm.value.pic_id = lead.value.pic_id || null
+  convertForm.value.akses_tipe = 'personal'
+  convertForm.value.allowed_roles = ['teknisi']
+  convertForm.value.assigned_team = []
+  convertError.value = null
+  newMemberUserId.value = null
+  newMemberRole.value = 'Teknisi Lapangan'
+
+  // Pre-add PIC to team if set
+  if (lead.value.pic_id) {
+    const picUser = usersList.value.find(u => u.id === lead.value!.pic_id)
+    if (picUser) {
+      convertForm.value.assigned_team.push({
+        user_id: picUser.id,
+        nama: picUser.name,
+        role: 'Penanggung Jawab (PIC)',
+      })
+    }
+  }
+  showConvertModal.value = true
+}
+
+const addTeamMember = () => {
+  if (!newMemberUserId.value) return
+  const user = usersList.value.find(u => u.id === newMemberUserId.value)
+  if (!user) return
+  if (convertForm.value.assigned_team.some(t => t.user_id === user.id)) {
+    alert('Pengguna / personil ini sudah ada di dalam tim proyek.')
+    return
+  }
+  convertForm.value.assigned_team.push({
+    user_id: user.id,
+    nama: user.name,
+    role: newMemberRole.value || 'Teknisi Lapangan',
+  })
+  newMemberUserId.value = null
+}
+
+const removeTeamMember = (index: number) => {
+  convertForm.value.assigned_team.splice(index, 1)
+}
+
+const toggleRole = (roleSlug: string) => {
+  const idx = convertForm.value.allowed_roles.indexOf(roleSlug)
+  if (idx >= 0) {
+    convertForm.value.allowed_roles.splice(idx, 1)
+  } else {
+    convertForm.value.allowed_roles.push(roleSlug)
+  }
+}
+
+const submitConvertProyek = async () => {
+  if (!lead.value) return
+  if (!convertForm.value.nama.trim()) {
+    convertError.value = 'Nama proyek wajib diisi.'
+    return
+  }
 
   isConverting.value = true
+  convertError.value = null
   try {
+    const today = new Date().toISOString().slice(0, 10)
+    const isSewa = lead.value.tipe_kontrak === 'Sewa'
+    const durasi = lead.value.sewa_durasi_bulan || 12
+    const skema  = lead.value.skema_pembayaran || 'Bulanan'
+
     const payload = {
-      nama: `Proyek - ${lead.value.perusahaan || lead.value.nama}`,
-      client_nama: lead.value.nama,
-      perusahaan: lead.value.perusahaan,
-      phone: lead.value.phone,
-      email: lead.value.email,
-      pic_id: lead.value.pic_id,
-      kategori: lead.value.tipe_proyek,
-      deskripsi: lead.value.catatan,
-      nilai: lead.value.estimasi,
-      lead_id: lead.value.id,
-      status: 'Belum Dimulai' as const,
+      nama:              convertForm.value.nama.trim(),
+      client_nama:       lead.value.nama,
+      perusahaan:        lead.value.perusahaan,
+      phone:             lead.value.phone,
+      email:             lead.value.email,
+      pic_id:            convertForm.value.pic_id,
+      akses_tipe:        convertForm.value.akses_tipe,
+      allowed_roles:     convertForm.value.akses_tipe === 'role' ? convertForm.value.allowed_roles : undefined,
+      tim:               convertForm.value.akses_tipe === 'personal' ? convertForm.value.assigned_team : undefined,
+      kategori:          lead.value.tipe_proyek,
+      deskripsi:         lead.value.catatan,
+      nilai:             lead.value.estimasi,
+      lead_id:           lead.value.id,
+      status:            'Belum Dimulai' as const,
+      tipe_kontrak:      isSewa ? ('Sewa' as const) : ('Reguler' as const),
+      sewa_durasi_bulan: isSewa ? durasi : undefined,
+      skema_pembayaran:  isSewa ? skema : undefined,
+      sewa_mulai:        isSewa ? (lead.value.sewa_mulai || today) : undefined,
+      sewa_selesai:      isSewa ? (lead.value.sewa_selesai || addMonthsToDate(today, durasi)) : undefined,
+      nominal_per_bulan: isSewa && lead.value.nominal_per_bulan ? lead.value.nominal_per_bulan : (isSewa && lead.value.estimasi ? Math.round(Number(lead.value.estimasi) / durasi) : undefined),
+      status_sewa:       isSewa ? ('Aktif' as const) : undefined,
     }
     const res = await proyeksApi.create(payload)
+    showConvertModal.value = false
     router.push(`/admin/proyek/${res.data.id}`)
   } catch (e: any) {
-    alert(e.message || 'Gagal mengonversi ke proyek.')
+    convertError.value = e.message || 'Gagal mengonversi ke proyek.'
+  } finally {
     isConverting.value = false
   }
 }
@@ -359,6 +485,10 @@ const timeline = computed(() => {
               <h1 v-if="!isEditing">{{ lead.nama }}</h1>
               <input v-else v-model="draft.nama" class="inline-input inline-input-title" />
               <span class="lead-badge">{{ lead.status }}</span>
+              <span v-if="lead.tipe_kontrak === 'Sewa'" class="badge-sewa-lg">
+                <Repeat :size="12" /> Sewa ({{ lead.sewa_durasi_bulan || 12 }} Bln - {{ lead.skema_pembayaran || 'Bulanan' }})
+              </span>
+              <span v-else class="badge-langsung-lg">Langsung</span>
             </div>
             <div class="lead-subtitle">
               <Building2 :size="14" />
@@ -380,8 +510,14 @@ const timeline = computed(() => {
               </button>
             </template>
             <template v-else-if="lead.status === 'Deal'">
-              <button class="btn-primary lead-btn-convert" @click="jadikanProyek" :disabled="isConverting">
-                <Rocket :size="16" /> {{ isConverting ? 'Memproses...' : 'Jadikan Proyek' }}
+              <button
+                class="btn-primary lead-btn-convert"
+                :class="{ 'btn-convert-sewa': lead.tipe_kontrak === 'Sewa' }"
+                @click="openConvertModal"
+                :disabled="isConverting"
+                :title="lead.tipe_kontrak === 'Sewa' ? 'Atur hak akses & otomatis membuat Proyek Sewa IT (' + (lead.sewa_durasi_bulan || 12) + ' Bulan)' : 'Atur hak akses & buat Proyek baru'"
+              >
+                <Rocket :size="16" /> {{ isConverting ? 'Memproses...' : (lead.tipe_kontrak === 'Sewa' ? 'Jadikan Proyek Sewa' : 'Jadikan Proyek') }}
               </button>
             </template>
           </template>
@@ -560,6 +696,112 @@ const timeline = computed(() => {
               </div>
             </div>
 
+            <!-- Model Kontrak & Sewa Section -->
+            <div class="contract-model-card">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <h2 class="card-title" style="margin: 0;">MODEL KONTRAK</h2>
+                <span v-if="!isEditing && lead.tipe_kontrak === 'Sewa'" class="badge-sewa-mini">
+                  <Repeat :size="10" /> Sewa IT
+                </span>
+                <span v-else-if="!isEditing" class="badge-langsung-mini">Langsung</span>
+              </div>
+
+              <!-- View Mode -->
+              <div v-if="!isEditing">
+                <div v-if="lead.tipe_kontrak === 'Sewa'" class="detail-sewa-box">
+                  <div class="dsb-row">
+                    <span class="dsb-label">Tipe:</span>
+                    <span class="dsb-val" style="color: #c084fc; font-weight: 600;">Sewa (Rental IT)</span>
+                  </div>
+                  <div class="dsb-row">
+                    <span class="dsb-label">Durasi Kontrak:</span>
+                    <span class="dsb-val">{{ lead.sewa_durasi_bulan || 12 }} Bulan</span>
+                  </div>
+                  <div class="dsb-row">
+                    <span class="dsb-label">Skema Penagihan:</span>
+                    <span class="dsb-val">{{ lead.skema_pembayaran || 'Bulanan' }}</span>
+                  </div>
+                  <div v-if="lead.sewa_mulai || lead.sewa_selesai" class="dsb-row">
+                    <span class="dsb-label">Periode:</span>
+                    <span class="dsb-val" style="font-size: 11.5px;">{{ lead.sewa_mulai || '—' }} s/d {{ lead.sewa_selesai || '—' }}</span>
+                  </div>
+                  <div class="dsb-cicilan-box">
+                    <span style="font-size: 11px; color: #d8b4fe;">Estimasi Cicilan Sewa:</span>
+                    <div style="font-size: 14px; font-weight: 700; color: #4ade80; font-family: monospace; margin: 2px 0;">
+                      Rp {{ (lead.nominal_per_bulan || Math.round((lead.estimasi || 0) / (lead.sewa_durasi_bulan || 12))).toLocaleString('id-ID') }} / bulan
+                    </div>
+                    <span style="font-size: 10.5px; color: var(--text-muted);">
+                      {{ lead.sewa_durasi_bulan || 12 }}x bayar dari total {{ fmtRp(lead.estimasi) }}
+                    </span>
+                  </div>
+                </div>
+                <div v-else style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; padding: 10px 12px; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px solid var(--border-color);">
+                  💼 <strong>Proyek Standar / Beli Putus</strong>. Pembayaran bertahap (DP, termin, pelunasan) setelah deal.
+                </div>
+              </div>
+
+              <!-- Edit Mode -->
+              <div v-else class="edit-contract-box">
+                <div class="type-segment" style="margin-bottom: 12px;">
+                  <button
+                    type="button"
+                    class="type-btn"
+                    :class="{ active: draft.tipe_kontrak === 'Langsung' }"
+                    @click="draft.tipe_kontrak = 'Langsung'"
+                  >
+                    💼 Langsung
+                  </button>
+                  <button
+                    type="button"
+                    class="type-btn"
+                    :class="{ active: draft.tipe_kontrak === 'Sewa' }"
+                    @click="draft.tipe_kontrak = 'Sewa'"
+                  >
+                    <Repeat :size="12" style="display:inline; margin-right:3px;" /> Sewa
+                  </button>
+                </div>
+
+                <div v-if="draft.tipe_kontrak === 'Sewa'" class="edit-sewa-fields">
+                  <div style="margin-bottom: 8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 4px;">
+                      <label style="font-size:11px; color:var(--text-muted);">Durasi (Bulan)</label>
+                      <div style="display:flex; gap:3px;">
+                        <button type="button" class="btn-quick-durasi-mini" @click="onDraftDurasiChange(6)">6B</button>
+                        <button type="button" class="btn-quick-durasi-mini" @click="onDraftDurasiChange(12)">12B</button>
+                        <button type="button" class="btn-quick-durasi-mini" @click="onDraftDurasiChange(24)">24B</button>
+                      </div>
+                    </div>
+                    <input v-model.number="draft.sewa_durasi_bulan" type="number" min="1" class="inline-input" style="width: 100%; box-sizing: border-box;" @input="onDraftDurasiChange(draft.sewa_durasi_bulan)" />
+                  </div>
+
+                  <div style="margin-bottom: 8px;">
+                    <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom: 4px;">Skema Pembayaran</label>
+                    <select v-model="draft.skema_pembayaran" class="inline-input" style="width: 100%; box-sizing: border-box;">
+                      <option value="Bulanan">Bulanan (Cicil per bulan)</option>
+                      <option value="Sekaligus">Sekaligus (Lunas di muka)</option>
+                    </select>
+                  </div>
+
+                  <div style="margin-bottom: 8px;">
+                    <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom: 4px;">Mulai Sewa</label>
+                    <input v-model="draft.sewa_mulai" type="date" class="inline-input" style="width: 100%; box-sizing: border-box;" @change="onDraftDurasiChange(draft.sewa_durasi_bulan)" />
+                  </div>
+
+                  <div style="margin-bottom: 8px;">
+                    <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom: 4px;">Selesai Sewa</label>
+                    <input v-model="draft.sewa_selesai" type="date" class="inline-input" style="width: 100%; box-sizing: border-box;" />
+                  </div>
+
+                  <div v-if="draft.estimasi && draft.sewa_durasi_bulan > 0" class="sewa-sim-banner" style="margin-top: 8px; padding: 6px 10px;">
+                    <span style="font-size: 11px; color: #d8b4fe;">Simulasi:</span>
+                    <strong style="color: #4ade80; font-family: monospace; font-size: 12.5px;">
+                      Rp {{ Math.round(draft.estimasi / draft.sewa_durasi_bulan).toLocaleString('id-ID') }}/bln
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="map-placeholder">
               <div class="map-pin"><MapPin :size="16" /></div>
               <div class="map-info">
@@ -723,6 +965,228 @@ const timeline = computed(() => {
             <button class="btn-ghost btn-half" @click="showActivityModal = false">Batal</button>
             <button class="btn-primary btn-half" @click="addActivity" :disabled="activitySaving">
               {{ activitySaving ? 'Menyimpan...' : 'Simpan Aktivitas' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ── Modal Konfirmasi Jadikan Proyek & Hak Akses ── -->
+    <Teleport to="body">
+      <div v-if="showConvertModal" class="modal-overlay" @click.self="showConvertModal = false">
+        <div class="modal-box convert-modal-box">
+          <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div class="convert-modal-icon">
+                <Rocket :size="20" />
+              </div>
+              <div>
+                <h2 style="font-size: 17px; font-weight: 700; color: var(--text-primary); margin: 0;">
+                  {{ lead?.tipe_kontrak === 'Sewa' ? 'Konfirmasi Jadikan Proyek Sewa IT' : 'Konfirmasi Jadikan Proyek' }}
+                </h2>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                  Tentukan penanggung jawab dan atur siapa saja yang boleh mengakses proyek ini.
+                </div>
+              </div>
+            </div>
+            <button class="modal-close" @click="showConvertModal = false"><X :size="16" /></button>
+          </div>
+
+          <div class="modal-body convert-modal-body">
+            <!-- Alert Error -->
+            <div v-if="convertError" class="crm-error-box" style="margin-bottom: 16px;">
+              <span style="font-size: 13px; color: #ef4444;">{{ convertError }}</span>
+            </div>
+
+            <!-- Nama Proyek -->
+            <div class="form-field" style="margin-bottom: 16px;">
+              <label class="form-label" style="font-weight: 600;">Nama Proyek <span style="color: #ef4444;">*</span></label>
+              <input v-model="convertForm.nama" type="text" class="form-input" placeholder="Masukkan nama proyek..." />
+            </div>
+
+            <!-- PIC Penanggung Jawab Proyek -->
+            <div class="form-field" style="margin-bottom: 20px;">
+              <label class="form-label" style="font-weight: 600;">
+                PIC Penanggung Jawab Utama
+                <span style="font-size: 11px; font-weight: normal; color: var(--text-muted); margin-left: 6px;">
+                  (Teknisi / PIC yang memimpin &amp; bertanggung jawab atas proyek)
+                </span>
+              </label>
+              <select v-model="convertForm.pic_id" class="form-select">
+                <option :value="null">-- Pilih Penanggung Jawab --</option>
+                <option v-for="u in usersList" :key="u.id" :value="u.id">
+                  {{ u.name }} ({{ u.role?.name || 'Staff' }})
+                </option>
+              </select>
+            </div>
+
+            <!-- Pilihan Hak Akses -->
+            <div class="form-field" style="margin-bottom: 20px;">
+              <label class="form-label" style="font-weight: 600;">
+                Pengaturan Hak Akses Proyek
+              </label>
+              <div class="access-type-grid">
+                <!-- Option 1: Personal -->
+                <div
+                  class="access-type-card"
+                  :class="{ active: convertForm.akses_tipe === 'personal' }"
+                  @click="convertForm.akses_tipe = 'personal'"
+                >
+                  <div class="access-type-header">
+                    <UserCircle :size="18" style="color: var(--accent-orange);" />
+                    <span class="access-type-title">Personal (Disarankan)</span>
+                  </div>
+                  <p class="access-type-desc">
+                    Hanya teknisi/personil yang ditugaskan khusus yang dapat melihat &amp; mengelola proyek ini.
+                  </p>
+                </div>
+
+                <!-- Option 2: Role Management -->
+                <div
+                  class="access-type-card"
+                  :class="{ active: convertForm.akses_tipe === 'role' }"
+                  @click="convertForm.akses_tipe = 'role'"
+                >
+                  <div class="access-type-header">
+                    <Shield :size="18" style="color: #60a5fa;" />
+                    <span class="access-type-title">Berdasarkan Role</span>
+                  </div>
+                  <p class="access-type-desc">
+                    Akses diberikan ke seluruh pengguna dengan role yang dipilih (mis: Teknisi, IT Support).
+                  </p>
+                </div>
+
+                <!-- Option 3: Semua Pengguna -->
+                <div
+                  class="access-type-card"
+                  :class="{ active: convertForm.akses_tipe === 'semua' }"
+                  @click="convertForm.akses_tipe = 'semua'"
+                >
+                  <div class="access-type-header">
+                    <Globe :size="18" style="color: #34d399;" />
+                    <span class="access-type-title">Semua (Publik)</span>
+                  </div>
+                  <p class="access-type-desc">
+                    Dapat dilihat oleh semua pengguna internal yang memiliki hak modul proyek.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Conditional: Personal Access Selector (Personil & Teknisi) -->
+            <div v-if="convertForm.akses_tipe === 'personal'" class="access-config-box" style="margin-bottom: 20px;">
+              <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                <Users :size="15" style="color: var(--accent-orange);" />
+                Personil / Teknisi yang Diberi Akses ke Proyek Ini
+              </div>
+
+              <!-- Add Member Input Row -->
+              <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+                <select v-model="newMemberUserId" class="form-select" style="flex: 1; min-width: 170px;">
+                  <option :value="null">-- Pilih Personil / Teknisi --</option>
+                  <option v-for="u in usersList" :key="u.id" :value="u.id">
+                    {{ u.name }} ({{ u.role?.name || 'Staff' }})
+                  </option>
+                </select>
+                <input
+                  v-model="newMemberRole"
+                  type="text"
+                  class="form-input"
+                  placeholder="Peran (mis: Teknisi Lapangan)"
+                  style="width: 160px;"
+                />
+                <button
+                  type="button"
+                  class="btn-primary"
+                  style="padding: 0 14px; font-size: 12px; height: 38px; display: flex; align-items: center; gap: 6px;"
+                  @click="addTeamMember"
+                  :disabled="!newMemberUserId"
+                >
+                  <Plus :size="14" /> Tambah
+                </button>
+              </div>
+
+              <!-- Members List -->
+              <div v-if="convertForm.assigned_team.length === 0" style="font-size: 12px; color: var(--text-muted); font-style: italic; padding: 6px 0;">
+                Belum ada anggota personil tambahan. (PIC utama otomatis memiliki akses).
+              </div>
+              <div v-else class="team-members-list">
+                <div
+                  v-for="(member, idx) in convertForm.assigned_team"
+                  :key="idx"
+                  class="team-member-item"
+                >
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="team-member-avatar">{{ (member.nama || '?')[0].toUpperCase() }}</div>
+                    <div>
+                      <div style="font-size: 13px; font-weight: 600; color: var(--text-primary);">{{ member.nama }}</div>
+                      <div style="font-size: 11px; color: var(--text-muted);">{{ member.role }}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn-icon-danger"
+                    @click="removeTeamMember(idx)"
+                    title="Hapus dari tim"
+                  >
+                    <Trash2 :size="14" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Conditional: Role Management Selector -->
+            <div v-if="convertForm.akses_tipe === 'role'" class="access-config-box" style="margin-bottom: 20px;">
+              <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; display: flex; align-items: center; gap: 8px;">
+                <Shield :size="15" style="color: var(--accent-orange);" />
+                Pilih Role yang Memiliki Hak Akses Proyek
+              </div>
+              <div style="font-size: 11.5px; color: var(--text-muted); margin-bottom: 12px;">
+                Role yang dipilih akan otomatis dapat melihat dan membuka detail proyek ini.
+              </div>
+              <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                <div
+                  v-for="r in rolesList"
+                  :key="r.id"
+                  class="role-select-chip"
+                  :class="{ selected: convertForm.allowed_roles.includes(r.slug) }"
+                  @click="toggleRole(r.slug)"
+                >
+                  <span class="role-chip-indicator" :style="{ background: r.color || '#f59e0b' }"></span>
+                  <span>{{ r.name }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Ringkasan Info Proyek / Kontrak -->
+            <div class="convert-summary-box">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 12px; color: var(--text-muted);">Tipe Kontrak:</span>
+                <span style="font-size: 12px; font-weight: 700; color: var(--text-primary);">
+                  {{ lead?.tipe_kontrak === 'Sewa' ? `Sewa IT (${lead.sewa_durasi_bulan || 12} Bulan - ${lead.skema_pembayaran || 'Bulanan'})` : 'Reguler (Langsung)' }}
+                </span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 12px; color: var(--text-muted);">Estimasi Nilai Proyek:</span>
+                <span style="font-size: 13px; font-weight: 800; color: var(--accent-orange);">
+                  IDR {{ fmtRp(lead?.estimasi ?? 0) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer modal-footer-split">
+            <button type="button" class="btn-ghost btn-half" @click="showConvertModal = false" :disabled="isConverting">
+              Batal
+            </button>
+            <button
+              type="button"
+              class="btn-primary btn-half"
+              @click="submitConvertProyek"
+              :disabled="isConverting"
+              style="display: flex; align-items: center; justify-content: center; gap: 8px;"
+            >
+              <Rocket :size="15" /> {{ isConverting ? 'Memproses...' : 'Konfirmasi & Buat Proyek' }}
             </button>
           </div>
         </div>
@@ -1169,4 +1633,288 @@ const timeline = computed(() => {
 .sk-header { height: 120px; background: rgba(255,255,255,0.03); border-radius: 12px; margin-bottom: 24px; animation: pulse 1.5s infinite ease-in-out; }
 .sk-col { height: 400px; background: rgba(255,255,255,0.03); border-radius: 12px; animation: pulse 1.5s infinite ease-in-out; }
 @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+
+/* ── Sewa & Contract Badges / Panels in CRM Detail ── */
+.badge-sewa-lg {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.badge-langsung-lg {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 20px;
+}
+.badge-sewa-mini {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.badge-langsung-mini {
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+.btn-convert-sewa {
+  background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%) !important;
+  color: #fff !important;
+  border: none !important;
+  box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);
+}
+.btn-convert-sewa:hover {
+  background: linear-gradient(135deg, #9333ea 0%, #6d28d9 100%) !important;
+}
+
+/* ── Detail Sewa Box ── */
+.contract-model-card {
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.detail-sewa-box {
+  background: rgba(168, 85, 247, 0.05);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.dsb-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+}
+.dsb-label {
+  color: var(--text-muted);
+}
+.dsb-val {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.dsb-cicilan-box {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  text-align: center;
+}
+.edit-contract-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+}
+.type-segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.type-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.type-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+.type-btn.active {
+  background: rgba(168, 85, 247, 0.18);
+  border-color: #a855f7;
+  color: #f3e8ff;
+}
+.btn-quick-durasi-mini {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  border-radius: 4px;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.btn-quick-durasi-mini:hover {
+  background: rgba(168, 85, 247, 0.2);
+  color: #e9d5ff;
+  border-color: #a855f7;
+}
+.sewa-sim-banner {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Convert to Proyek Modal Styles ── */
+.convert-modal-box {
+  max-width: 620px;
+  width: 95%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.convert-modal-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-orange);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.access-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+}
+.access-type-card {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.access-type-card:hover {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.03);
+}
+.access-type-card.active {
+  border-color: var(--accent-orange);
+  background: rgba(245, 158, 11, 0.1);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
+}
+.access-type-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.access-type-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 0;
+}
+.access-config-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 14px;
+}
+.team-members-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.team-member-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.team-member-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--accent-orange);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.btn-icon-danger {
+  background: transparent;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  transition: opacity 0.2s, background 0.2s;
+}
+.btn-icon-danger:hover {
+  opacity: 1;
+  background: rgba(239, 68, 68, 0.15);
+}
+.role-select-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.role-select-chip:hover {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+.role-select-chip.selected {
+  border-color: var(--accent-orange);
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.role-chip-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.convert-summary-box {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
 </style>

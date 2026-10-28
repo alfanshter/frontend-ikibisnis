@@ -86,6 +86,8 @@ const tipeBadgeClass = (tipe: string) => ({
   'DP': 'tipe-badge tipe-dp',
   'Termin': 'tipe-badge tipe-termin',
   'Pelunasan': 'tipe-badge tipe-pelunasan',
+  'Sewa': 'tipe-badge tipe-sewa',
+  'Sewa Bulanan': 'tipe-badge tipe-sewa',
 }[tipe] ?? 'tipe-badge tipe-lainnya')
 
 const statusBadge = (s: string) => ({
@@ -489,7 +491,7 @@ const goBack = () => router.push(`/admin/proyek/${proyekId}`)
                 <div class="form-field">
                   <label class="form-label">Tipe</label>
                   <select v-model="form.tipe" class="form-input">
-                    <option v-for="t in ['DP','Termin','Pelunasan','Lainnya']" :key="t" :value="t">{{ t }}</option>
+                    <option v-for="t in ['DP','Termin','Pelunasan','Sewa','Sewa Bulanan','Lainnya']" :key="t" :value="t">{{ t }}</option>
                   </select>
                 </div>
               </div>
@@ -651,6 +653,7 @@ const goBack = () => router.push(`/admin/proyek/${proyekId}`)
 .tipe-dp        { background: rgba(59,130,246,0.1); color: #60a5fa; }
 .tipe-termin    { background: rgba(245,158,11,0.1); color: #f59e0b; }
 .tipe-pelunasan { background: rgba(34,197,94,0.1);  color: #22c55e; }
+.tipe-sewa      { background: rgba(168,85,247,0.12); color: #c084fc; border: 1px solid rgba(168,85,247,0.25); }
 .tipe-lainnya   { background: rgba(148,163,184,0.1); color: #94a3b8; }
 .inv-badge { font-size: 11px; padding: 2px 9px; border-radius: 20px; font-weight: 600; }
 .inv-badge-draft    { background: rgba(107,114,128,0.1); color: #9ca3af; border: 1px solid rgba(107,114,128,0.2); }

@@ -2,10 +2,11 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
-import { Search, Plus, Wrench, User, Calendar, X, Pencil, Trash2, RefreshCw, AlertCircle } from '@lucide/vue'
+import { Search, Plus, Wrench, User, Calendar, X, Pencil, Trash2, RefreshCw, AlertCircle, Repeat, Clock, DollarSign } from '@lucide/vue'
 import {
   proyeksApi,
   type ProyekResponse, type StatusProyek, type ProyekPayload,
+  type TipeKontrakProyek, type SkemaPembayaranSewa
 } from '@/services/api'
 
 const router = useRouter()
@@ -21,9 +22,11 @@ const saving       = ref(false)
 const deletingId   = ref<number | null>(null)
 
 // ─── Filters & Pagination ────────────────────────────────────────────────────
-const search       = ref('')
-const activeFilter = ref<'Semua' | StatusProyek>('Semua')
+const search             = ref('')
+const activeFilter       = ref<'Semua' | StatusProyek>('Semua')
 const filterOptions: Array<'Semua' | StatusProyek> = ['Semua', 'Belum Dimulai', 'Berjalan', 'QC', 'Serah Terima', 'Selesai', 'Hold']
+
+const activeTipeKontrak  = ref<'Semua' | 'Reguler' | 'Sewa'>('Semua')
 
 const currentPage  = ref(1)
 const lastPage     = ref(1)
@@ -40,6 +43,7 @@ async function fetchProyeks() {
     const res = await proyeksApi.list({
       search: search.value || undefined,
       status: activeFilter.value !== 'Semua' ? activeFilter.value : undefined,
+      tipe_kontrak: activeTipeKontrak.value !== 'Semua' ? activeTipeKontrak.value : undefined,
       page:   currentPage.value,
     })
     proyeks.value    = res.data
@@ -55,6 +59,11 @@ async function fetchProyeks() {
 onMounted(fetchProyeks)
 
 watch(activeFilter, () => {
+  currentPage.value = 1
+  fetchProyeks()
+})
+
+watch(activeTipeKontrak, () => {
   currentPage.value = 1
   fetchProyeks()
 })
@@ -113,22 +122,51 @@ const openDetail = (p: ProyekResponse) => {
 const showModal = ref(false)
 const editId    = ref<number | null>(null)
 
-const emptyForm = () => ({
-  nama:          '',
-  client_nama:   '',
-  perusahaan:    '',
-  kategori:      '',
-  divisi:        '',
-  tanggal:       new Date().toISOString().slice(0, 10),
-  target_selesai:new Date().toISOString().slice(0, 10),
-  deskripsi:     '',
-  nilai:         0,
-  progress:      0,
-  status:        'Belum Dimulai' as StatusProyek,
-})
+const computeEndDateFromMonths = (startStr: string, months: number) => {
+  if (!startStr) return ''
+  const d = new Date(startStr)
+  d.setMonth(d.getMonth() + months)
+  return d.toISOString().slice(0, 10)
+}
+
+const emptyForm = () => {
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    nama:              '',
+    client_nama:       '',
+    perusahaan:        '',
+    kategori:          '',
+    divisi:            '',
+    tipe_kontrak:      'Reguler' as TipeKontrakProyek,
+    sewa_mulai:        today,
+    sewa_selesai:      computeEndDateFromMonths(today, 12),
+    sewa_durasi_bulan: 12,
+    skema_pembayaran:  'Bulanan' as SkemaPembayaranSewa,
+    nominal_per_bulan: 0,
+    tanggal:           today,
+    target_selesai:    today,
+    deskripsi:         '',
+    nilai:             0,
+    progress:          0,
+    status:            'Belum Dimulai' as StatusProyek,
+  }
+}
 
 const form    = ref(emptyForm())
 const formErr = ref<string | null>(null)
+
+const onSewaDurasiChange = (months: number) => {
+  form.value.sewa_durasi_bulan = months
+  if (form.value.sewa_mulai) {
+    form.value.sewa_selesai = computeEndDateFromMonths(form.value.sewa_mulai, months)
+  }
+}
+
+const estimasiPerBulan = computed(() => {
+  const n = Number(form.value.nilai) || 0
+  const d = Number(form.value.sewa_durasi_bulan) || 1
+  return d > 0 ? Math.round(n / d) : 0
+})
 
 const openAdd = () => {
   editId.value = null
@@ -141,17 +179,23 @@ const openEdit = (p: ProyekResponse, e: Event) => {
   e.stopPropagation()
   editId.value = p.id
   form.value = {
-    nama:          p.nama,
-    client_nama:   p.client_nama ?? '',
-    perusahaan:    p.perusahaan ?? '',
-    kategori:      p.kategori ?? '',
-    divisi:        p.divisi ?? '',
-    tanggal:       p.tanggal ?? new Date().toISOString().slice(0, 10),
-    target_selesai:p.target_selesai ?? new Date().toISOString().slice(0, 10),
-    deskripsi:     p.deskripsi ?? '',
-    nilai:         p.nilai ?? 0,
-    progress:      p.progress ?? 0,
-    status:        p.status ?? 'Berjalan',
+    nama:              p.nama,
+    client_nama:       p.client_nama ?? '',
+    perusahaan:        p.perusahaan ?? '',
+    kategori:          p.kategori ?? '',
+    divisi:            p.divisi ?? '',
+    tipe_kontrak:      p.tipe_kontrak ?? 'Reguler',
+    sewa_mulai:        p.sewa_mulai ?? new Date().toISOString().slice(0, 10),
+    sewa_selesai:      p.sewa_selesai ?? new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
+    sewa_durasi_bulan: p.sewa_durasi_bulan ?? 12,
+    skema_pembayaran:  (p.skema_pembayaran ?? 'Bulanan') as SkemaPembayaranSewa,
+    nominal_per_bulan: p.nominal_per_bulan ?? 0,
+    tanggal:           p.tanggal ?? new Date().toISOString().slice(0, 10),
+    target_selesai:    p.target_selesai ?? new Date().toISOString().slice(0, 10),
+    deskripsi:         p.deskripsi ?? '',
+    nilai:             p.nilai ?? 0,
+    progress:          p.progress ?? 0,
+    status:            p.status ?? 'Berjalan',
   }
   formErr.value = null
   showModal.value = true
@@ -165,17 +209,23 @@ const submitForm = async () => {
   formErr.value = null
   try {
     const payload: ProyekPayload = {
-      nama:           form.value.nama,
-      client_nama:    form.value.client_nama || undefined,
-      perusahaan:     form.value.perusahaan || undefined,
-      kategori:       form.value.kategori || undefined,
-      divisi:         form.value.divisi || undefined,
-      tanggal:        form.value.tanggal || undefined,
-      target_selesai: form.value.target_selesai || undefined,
-      deskripsi:      form.value.deskripsi || undefined,
-      nilai:          Number(form.value.nilai) || 0,
-      progress:       Number(form.value.progress) || 0,
-      status:         form.value.status,
+      nama:              form.value.nama,
+      client_nama:       form.value.client_nama || undefined,
+      perusahaan:        form.value.perusahaan || undefined,
+      kategori:          form.value.kategori || undefined,
+      divisi:            form.value.divisi || undefined,
+      tipe_kontrak:      form.value.tipe_kontrak,
+      sewa_mulai:        form.value.tipe_kontrak === 'Sewa' ? form.value.sewa_mulai : undefined,
+      sewa_selesai:      form.value.tipe_kontrak === 'Sewa' ? form.value.sewa_selesai : undefined,
+      sewa_durasi_bulan: form.value.tipe_kontrak === 'Sewa' ? Number(form.value.sewa_durasi_bulan) : undefined,
+      skema_pembayaran:  form.value.tipe_kontrak === 'Sewa' ? form.value.skema_pembayaran : undefined,
+      nominal_per_bulan: form.value.tipe_kontrak === 'Sewa' ? (Number(form.value.nominal_per_bulan) || estimasiPerBulan.value) : undefined,
+      tanggal:           form.value.tanggal || undefined,
+      target_selesai:    form.value.target_selesai || undefined,
+      deskripsi:         form.value.deskripsi || undefined,
+      nilai:             Number(form.value.nilai) || 0,
+      progress:          Number(form.value.progress) || 0,
+      status:            form.value.status,
     }
 
     if (editId.value !== null) {
@@ -217,7 +267,7 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
     <div class="page-toolbar">
       <div class="page-toolbar-left">
         <h1>Database Proyek</h1>
-        <p>Monitoring seluruh proyek yang berjalan</p>
+        <p>Monitoring seluruh proyek dan kontrak sewa yang berjalan</p>
       </div>
       <button class="btn-primary" @click="openAdd">
         <Plus :size="16" />
@@ -233,9 +283,30 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
           v-model="search"
           class="search-input"
           type="text"
-          placeholder="Cari proyek atau client..."
+          placeholder="Cari proyek, client, atau sewa..."
         />
       </div>
+
+      <!-- Contract Type Filter -->
+      <div class="filter-tabs contract-tabs">
+        <button
+          class="filter-tab"
+          :class="{ active: activeTipeKontrak === 'Semua' }"
+          @click="activeTipeKontrak = 'Semua'"
+        >Semua</button>
+        <button
+          class="filter-tab"
+          :class="{ active: activeTipeKontrak === 'Reguler' }"
+          @click="activeTipeKontrak = 'Reguler'"
+        >Reguler</button>
+        <button
+          class="filter-tab"
+          :class="{ active: activeTipeKontrak === 'Sewa' }"
+          @click="activeTipeKontrak = 'Sewa'"
+        >🔄 Sewa IT</button>
+      </div>
+
+      <!-- Status Filter Tabs -->
       <div class="filter-tabs">
         <button
           v-for="f in filterOptions"
@@ -266,10 +337,16 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
         v-for="p in paginatedList"
         :key="p.id"
         class="project-card"
+        :class="{ 'card-is-sewa': p.tipe_kontrak === 'Sewa' }"
         @click="openDetail(p)"
       >
         <div class="project-card-header">
-          <span class="project-card-id">{{ p.kode }}</span>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span class="project-card-id">{{ p.kode }}</span>
+            <span v-if="p.tipe_kontrak === 'Sewa'" class="badge badge-sewa">
+              <Repeat :size="11" /> Sewa {{ p.sewa_durasi_bulan ? p.sewa_durasi_bulan + ' Bln' : '' }}
+            </span>
+          </div>
           <span :class="badgeClass(p.status)">{{ p.status }}</span>
         </div>
         <div>
@@ -277,13 +354,23 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
           <div class="project-card-client">{{ p.client_nama || p.perusahaan }}</div>
         </div>
         <div class="project-card-meta">
-          <span class="meta-tag"><Wrench :size="11" />{{ p.kategori }}</span>
-          <span class="meta-pic"><User :size="12" />{{ p.pic || p.divisi }}</span>
-          <span class="meta-date"><Calendar :size="12" />{{ p.tanggal }}</span>
+          <span class="meta-tag"><Wrench :size="11" />{{ p.kategori || p.divisi || 'Umum' }}</span>
+          <span class="meta-pic"><User :size="12" />{{ p.pic || p.divisi || 'Tim' }}</span>
+          <span v-if="p.tipe_kontrak === 'Sewa'" class="meta-date sewa-meta" title="Periode Sewa">
+            <Clock :size="12" />{{ p.sewa_mulai || p.tanggal }} s/d {{ p.sewa_selesai || '—' }}
+          </span>
+          <span v-else class="meta-date"><Calendar :size="12" />{{ p.tanggal }}</span>
         </div>
         <div class="project-card-footer">
           <div class="project-value-row">
-            <span class="project-card-value">{{ p.nilai_format }}</span>
+            <div>
+              <div class="project-card-value">
+                {{ (p.tipe_kontrak === 'Sewa' && p.skema_pembayaran === 'Bulanan' && p.nominal_per_bulan) ? p.nominal_per_bulan_format + ' / bln' : p.nilai_format }}
+              </div>
+              <div v-if="p.tipe_kontrak === 'Sewa' && p.skema_pembayaran === 'Bulanan'" style="font-size: 11px; color: var(--text-muted);">
+                Total Kontrak: {{ p.nilai_format }}
+              </div>
+            </div>
             <span class="project-card-pct">{{ p.progress }}%</span>
           </div>
           <div class="proj-bar">
@@ -323,18 +410,41 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
     <!-- ── Modal Tambah / Edit ───────────────────────────── -->
     <Teleport to="body">
       <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
-        <div class="modal-box">
+        <div class="modal-box" style="max-width: 620px;">
           <div class="modal-header">
             <h2>{{ editId !== null ? 'Edit Proyek' : 'Tambah Proyek Baru' }}</h2>
             <button class="modal-close" @click="closeModal"><X :size="16" /></button>
           </div>
 
           <div class="modal-body">
+            <!-- Tipe Kontrak Switcher -->
+            <div class="contract-type-selector">
+              <label class="form-label" style="margin-bottom: 8px;">Model Kontrak Proyek</label>
+              <div class="type-segment">
+                <button
+                  type="button"
+                  class="type-btn"
+                  :class="{ active: form.tipe_kontrak === 'Reguler' }"
+                  @click="form.tipe_kontrak = 'Reguler'"
+                >
+                  💼 Proyek Reguler (Beli / Standar)
+                </button>
+                <button
+                  type="button"
+                  class="type-btn"
+                  :class="{ active: form.tipe_kontrak === 'Sewa' }"
+                  @click="form.tipe_kontrak = 'Sewa'"
+                >
+                  🔄 Proyek Sewa (Rental IT / Langganan)
+                </button>
+              </div>
+            </div>
+
             <!-- Row 1: Nama Proyek | Client -->
             <div class="form-row">
               <div class="form-field">
                 <label class="form-label">Nama Proyek *</label>
-                <input v-model="form.nama" class="form-input" placeholder="Nama proyek" />
+                <input v-model="form.nama" class="form-input" :placeholder="form.tipe_kontrak === 'Sewa' ? 'Contoh: Sewa Server IT & Maintenance' : 'Nama proyek'" />
               </div>
               <div class="form-field">
                 <label class="form-label">Nama Client</label>
@@ -350,9 +460,75 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
               </div>
             </div>
 
-            <!-- Row 2: Nilai | Divisi -->
+            <!-- ── Sewa Configuration Box (If Sewa) ── -->
+            <div v-if="form.tipe_kontrak === 'Sewa'" class="sewa-box">
+              <div class="sewa-box-title">
+                <Repeat :size="16" style="color: #a855f7;" />
+                Pengaturan Sewa &amp; Pembayaran
+              </div>
+
+              <!-- Periode Sewa -->
+              <div class="form-row">
+                <div class="form-field">
+                  <label class="form-label">Tanggal Mulai Sewa *</label>
+                  <input v-model="form.sewa_mulai" type="date" class="form-input" @change="onSewaDurasiChange(form.sewa_durasi_bulan)" />
+                </div>
+                <div class="form-field">
+                  <label class="form-label">Tanggal Selesai Sewa *</label>
+                  <input v-model="form.sewa_selesai" type="date" class="form-input" />
+                </div>
+              </div>
+
+              <!-- Durasi & Quick Buttons -->
+              <div class="form-row">
+                <div class="form-field">
+                  <label class="form-label">Durasi Sewa (Bulan)</label>
+                  <div style="display:flex; gap:6px; align-items:center;">
+                    <input v-model.number="form.sewa_durasi_bulan" type="number" min="1" max="120" class="form-input" style="width: 90px;" @input="onSewaDurasiChange(form.sewa_durasi_bulan)" />
+                    <div style="display:flex; gap:4px;">
+                      <button type="button" class="btn-quick-durasi" :class="{ active: form.sewa_durasi_bulan === 6 }" @click="onSewaDurasiChange(6)">6 Bln</button>
+                      <button type="button" class="btn-quick-durasi" :class="{ active: form.sewa_durasi_bulan === 12 }" @click="onSewaDurasiChange(12)">12 Bln (1 Thn)</button>
+                      <button type="button" class="btn-quick-durasi" :class="{ active: form.sewa_durasi_bulan === 24 }" @click="onSewaDurasiChange(24)">24 Bln</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-field">
+                  <label class="form-label">Skema Pembayaran</label>
+                  <select v-model="form.skema_pembayaran" class="form-select">
+                    <option value="Bulanan">Bulanan (Per Bulan)</option>
+                    <option value="Sekaligus">Bayar Langsung (Sekaligus di Muka)</option>
+                    <option value="Termin">Termin / Fleksibel</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Total Nilai Sewa -->
+              <div class="form-row">
+                <div class="form-field">
+                  <label class="form-label">Total Nilai Sewa Kontrak (Rp) *</label>
+                  <input v-model.number="form.nilai" type="number" min="0" step="500000" class="form-input" placeholder="Contoh: 40000000" />
+                </div>
+                <div class="form-field" v-if="form.skema_pembayaran === 'Bulanan'">
+                  <label class="form-label">Nominal Per Bulan (Rp)</label>
+                  <input v-model.number="form.nominal_per_bulan" type="number" min="0" class="form-input" :placeholder="String(estimasiPerBulan)" />
+                </div>
+              </div>
+
+              <!-- Real-time Simulation Box -->
+              <div class="sewa-sim-banner">
+                <div v-if="form.skema_pembayaran === 'Bulanan'">
+                  💡 <strong>Simulasi Bulanan:</strong> Total Rp {{ Number(form.nilai || 0).toLocaleString('id-ID') }} ÷ {{ form.sewa_durasi_bulan }} bulan =
+                  <strong style="color: #a855f7;">Rp {{ (form.nominal_per_bulan || estimasiPerBulan).toLocaleString('id-ID') }} / bulan</strong>
+                </div>
+                <div v-else>
+                  💡 <strong>Simulasi Sekaligus:</strong> Dibayarkan lunas <strong style="color: #a855f7;">Rp {{ Number(form.nilai || 0).toLocaleString('id-ID') }}</strong> di awal periode kontrak sewa.
+                </div>
+              </div>
+            </div>
+
+            <!-- Row 2: Nilai Reguler (If not Sewa) | Divisi -->
             <div class="form-row">
-              <div class="form-field">
+              <div class="form-field" v-if="form.tipe_kontrak !== 'Sewa'">
                 <label class="form-label">Nilai Proyek (Rp)</label>
                 <input v-model.number="form.nilai" type="number" min="0" step="1000000" class="form-input" placeholder="0" />
               </div>
@@ -365,8 +541,8 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
               </div>
             </div>
 
-            <!-- Row 3: Tanggal | Target -->
-            <div class="form-row">
+            <!-- Row 3: Tanggal | Target (If Reguler) -->
+            <div class="form-row" v-if="form.tipe_kontrak !== 'Sewa'">
               <div class="form-field">
                 <label class="form-label">Tanggal Mulai</label>
                 <input v-model="form.tanggal" type="date" class="form-input" />
@@ -482,4 +658,106 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
 
 /* ── Empty state flex ── */
 .empty-state { display: flex; align-items: center; justify-content: center; }
+
+/* ── Sewa styles ── */
+.badge-sewa {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+.card-is-sewa {
+  border-left: 3px solid #a855f7 !important;
+}
+.sewa-meta {
+  color: #c084fc !important;
+  font-weight: 500;
+}
+.contract-tabs {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+.contract-type-selector {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.type-segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.type-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.type-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+.type-btn.active {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: #a855f7;
+  color: #e9d5ff;
+}
+.sewa-box {
+  background: rgba(168, 85, 247, 0.04);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.sewa-box-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #d8b4fe;
+  margin-bottom: 14px;
+}
+.btn-quick-durasi {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-quick-durasi:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+.btn-quick-durasi.active {
+  background: #a855f7;
+  color: #fff;
+  border-color: #a855f7;
+}
+.sewa-sim-banner {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(168, 85, 247, 0.08);
+  border-left: 3px solid #a855f7;
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
 </style>

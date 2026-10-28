@@ -508,6 +508,15 @@ export interface LeadResponse {
   tipe_proyek: string | null
   skala: string | null
   intensitas: string | null
+  tipe_kontrak?: 'Langsung' | 'Sewa' | null
+  sewa_durasi_bulan?: number | null
+  skema_pembayaran?: 'Bulanan' | 'Sekaligus' | null
+  sewa_mulai?: string | null
+  sewa_selesai?: string | null
+  nominal_per_bulan?: number | null
+  akses_tipe?: 'personal' | 'role' | 'semua' | null
+  allowed_roles?: (string | number)[] | null
+  assigned_users?: number[] | null
   created_by: number | null
   created_at: string
   updated_at: string
@@ -548,6 +557,9 @@ export interface LeadPayload {
   nama: string
   perusahaan: string
   pic_id?: number | null
+  akses_tipe?: 'personal' | 'role' | 'semua'
+  allowed_roles?: (string | number)[]
+  assigned_users?: number[]
   kebutuhan?: string
   sumber: LeadSumber
   estimasi?: number | null
@@ -559,10 +571,16 @@ export interface LeadPayload {
   tipe_proyek?: string
   skala?: string
   intensitas?: string
+  tipe_kontrak?: 'Langsung' | 'Sewa'
+  sewa_durasi_bulan?: number
+  skema_pembayaran?: 'Bulanan' | 'Sekaligus'
+  sewa_mulai?: string
+  sewa_selesai?: string
+  nominal_per_bulan?: number
 }
 
 export const leadsApi = {
-  list(params?: { search?: string; status?: string; page?: number }) {
+  list(params?: { search?: string; status?: string; tipe_kontrak?: string; page?: number }) {
     return request<{ data: LeadResponse[]; meta: { current_page: number; last_page: number; per_page: number; total: number } }>(
       'GET', `/leads${buildQs(params)}`
     )
@@ -827,6 +845,24 @@ export const penawaransApi = {
 // ─── Proyek API ───────────────────────────────────────────────────────────────
 
 export type StatusProyek = 'Belum Dimulai' | 'Berjalan' | 'QC' | 'Serah Terima' | 'Selesai' | 'Hold'
+export type TipeKontrakProyek = 'Reguler' | 'Sewa'
+export type SkemaPembayaranSewa = 'Bulanan' | 'Sekaligus' | 'Termin'
+
+export interface ProyekSewaPerpanjanganResponse {
+  id: number
+  tanggal_perpanjangan: string
+  sewa_mulai_lama: string | null
+  sewa_selesai_lama: string | null
+  sewa_mulai_baru: string
+  sewa_selesai_baru: string
+  durasi_bulan: number
+  nominal: number
+  nominal_format: string
+  skema_pembayaran: string | null
+  catatan: string | null
+  created_by: string | null
+  created_at: string
+}
 
 export interface ProyekResponse {
   id: number
@@ -839,8 +875,19 @@ export interface ProyekResponse {
   email: string | null
   kategori: string | null
   divisi: string | null
+  tipe_kontrak: TipeKontrakProyek
+  sewa_mulai: string | null
+  sewa_selesai: string | null
+  sewa_durasi_bulan: number | null
+  skema_pembayaran: SkemaPembayaranSewa | null
+  nominal_per_bulan: number | null
+  nominal_per_bulan_format: string | null
+  status_sewa: string | null
+  sisa_hari_sewa: number | null
   pic_id: number | null
   pic: string | null
+  akses_tipe?: 'personal' | 'role' | 'semua' | null
+  allowed_roles?: (string | number)[] | null
   tanggal: string | null
   targetSelesai: string | null
   target_selesai: string | null
@@ -854,20 +901,14 @@ export interface ProyekResponse {
   created_at: string
   updated_at: string
   tim?: ProyekTimResponse[]
-}
-
-export interface ProyekTimResponse {
-  id: number
-  user_id: number | null
-  nama: string
-  role: string | null
-  avatar?: string | null
+  perpanjangan_sewas?: ProyekSewaPerpanjanganResponse[]
 }
 
 export interface ProyekStatsResponse {
   by_status: Array<{ status: string; count: number }>
   total: number
   nilai_total: number
+  total_sewa?: number
 }
 
 export interface ProyekPayload {
@@ -878,7 +919,17 @@ export interface ProyekPayload {
   email?: string
   kategori?: string
   divisi?: string
+  tipe_kontrak?: TipeKontrakProyek
+  sewa_mulai?: string
+  sewa_selesai?: string
+  sewa_durasi_bulan?: number
+  skema_pembayaran?: SkemaPembayaranSewa
+  nominal_per_bulan?: number
+  status_sewa?: string
   pic_id?: number | null
+  akses_tipe?: 'personal' | 'role' | 'semua'
+  allowed_roles?: (string | number)[]
+  tim?: Array<{ user_id?: number | null; nama: string; role?: string }>
   tanggal?: string
   target_selesai?: string
   deskripsi?: string
@@ -890,7 +941,7 @@ export interface ProyekPayload {
 }
 
 export const proyeksApi = {
-  list(params?: { search?: string; status?: string; page?: number }) {
+  list(params?: { search?: string; status?: string; tipe_kontrak?: string; page?: number }) {
     return request<{ data: ProyekResponse[]; meta: { current_page: number; last_page: number; per_page: number; total: number } }>(
       'GET', `/proyeks${buildQs(params)}`
     )
@@ -912,6 +963,24 @@ export const proyeksApi = {
   },
   updateProgress(id: number, progress: number) {
     return request<{ message: string; data: ProyekResponse }>('PATCH', `/proyeks/${id}/progress`, { progress })
+  },
+  perpanjangSewa(id: number, payload: {
+    durasi_bulan: number
+    sewa_mulai_baru?: string
+    sewa_selesai_baru: string
+    nominal: number
+    skema_pembayaran?: string
+    catatan?: string
+    generate_invoices?: boolean
+  }) {
+    return request<{ message: string; data: ProyekResponse }>('POST', `/proyeks/${id}/perpanjang-sewa`, payload as unknown as Record<string, unknown>)
+  },
+  generateSewaInvoices(id: number, payload: {
+    skema: 'Bulanan' | 'Sekaligus'
+    ppn?: number
+    jatuh_tempo_hari?: number
+  }) {
+    return request<{ message: string; count: number }>('POST', `/proyeks/${id}/generate-sewa-invoices`, payload as unknown as Record<string, unknown>)
   },
   delete(id: number) {
     return request<{ message: string }>('DELETE', `/proyeks/${id}`)
@@ -1014,7 +1083,7 @@ export const proyekQcApi = {
 }
 
 // ─── Proyek Invoice ───────────────────────────────────────────────────────────
-export type InvoiceTipe = 'DP' | 'Termin' | 'Pelunasan' | 'Lainnya'
+export type InvoiceTipe = 'DP' | 'Termin' | 'Pelunasan' | 'Sewa' | 'Sewa Bulanan' | 'Lainnya'
 export type InvoiceStatus = 'Draft' | 'Terkirim' | 'Lunas' | 'Jatuh Tempo'
 
 export interface ProyekInvoiceItem {

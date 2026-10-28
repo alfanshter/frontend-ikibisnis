@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import {
   Search, Plus, Building2, X, ChevronDown, RefreshCw,
-  AlertCircle, Trash2, MessageSquare, Settings
+  AlertCircle, Trash2, MessageSquare, Settings, Repeat
 } from '@lucide/vue'
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
 import {
@@ -44,8 +44,9 @@ const lastPage    = ref(1)
 const total       = ref(0)
 
 // Filters
-const search       = ref('')
-const filterStatus = ref('')
+const search            = ref('')
+const filterStatus      = ref('')
+const filterTipeKontrak = ref('')
 let   searchTimer: ReturnType<typeof setTimeout>
 
 // PIC users list
@@ -73,26 +74,49 @@ const filteredClients = computed(() => {
   )
 })
 
-const emptyForm = () => ({
-  kode_lead:   '' as string | null,
-  tanggal:     new Date().toISOString().slice(0, 10),
-  nama:        '',
-  pic:         '',
-  perusahaan:  '',
-  kebutuhan:   '',
-  sumber:      'WhatsApp' as LeadSumber,
-  estimasi:    null as number | null,
-  status:      'Prospek' as LeadStatus,
-  phone:       '',
-  email:       '',
-  lokasi:      '',
-  catatan:     '',
-  tipe_proyek: '',
-  skala:       '',
-  intensitas:  '',
-})
+const addMonthsToDate = (dateStr: string, months: number) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  d.setMonth(d.getMonth() + months)
+  return d.toISOString().slice(0, 10)
+}
+
+const emptyForm = () => {
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    kode_lead:         '' as string | null,
+    tanggal:           today,
+    nama:              '',
+    pic:               '',
+    perusahaan:        '',
+    kebutuhan:         '',
+    sumber:            'WhatsApp' as LeadSumber,
+    estimasi:          null as number | null,
+    status:            'Prospek' as LeadStatus,
+    phone:             '',
+    email:             '',
+    lokasi:            '',
+    catatan:           '',
+    tipe_proyek:       '',
+    skala:             '',
+    intensitas:        '',
+    tipe_kontrak:      'Langsung' as 'Langsung' | 'Sewa',
+    sewa_durasi_bulan: 12,
+    skema_pembayaran:  'Bulanan' as 'Bulanan' | 'Sekaligus',
+    sewa_mulai:        today,
+    sewa_selesai:      addMonthsToDate(today, 12),
+    nominal_per_bulan: null as number | null,
+  }
+}
 
 const form = ref(emptyForm())
+
+const onSewaDurasiChange = (months: number) => {
+  form.value.sewa_durasi_bulan = months
+  if (form.value.sewa_mulai) {
+    form.value.sewa_selesai = addMonthsToDate(form.value.sewa_mulai, months)
+  }
+}
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────
 async function fetchLeads(page = 1) {
@@ -100,8 +124,9 @@ async function fetchLeads(page = 1) {
   error.value   = null
   try {
     const res = await leadsApi.list({
-      search: search.value || undefined,
-      status: filterStatus.value || undefined,
+      search:       search.value || undefined,
+      status:       filterStatus.value || undefined,
+      tipe_kontrak: filterTipeKontrak.value || undefined,
       page,
     })
     leads.value       = res.data
@@ -142,6 +167,7 @@ watch(search, () => {
   searchTimer = setTimeout(() => { currentPage.value = 1; fetchLeads(1) }, 350)
 })
 watch(filterStatus, () => { currentPage.value = 1; fetchLeads(1) })
+watch(filterTipeKontrak, () => { currentPage.value = 1; fetchLeads(1) })
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
 const fmtRp = (n: number | null) => {
@@ -206,22 +232,28 @@ async function openAdd() {
 async function openEdit(lead: LeadResponse) {
   editId.value = lead.id
   form.value = {
-    kode_lead:   lead.kode_lead ?? '',
-    tanggal:     lead.tanggal,
-    nama:        lead.nama,
-    pic:         lead.pic ?? '',
-    perusahaan:  lead.perusahaan,
-    kebutuhan:   lead.kebutuhan ?? '',
-    sumber:      lead.sumber,
-    estimasi:    lead.estimasi,
-    status:      lead.status,
-    phone:       lead.phone ?? '',
-    email:       lead.email ?? '',
-    lokasi:      lead.lokasi ?? '',
-    catatan:     lead.catatan ?? '',
-    tipe_proyek: lead.tipe_proyek ?? '',
-    skala:       lead.skala ?? '',
-    intensitas:  lead.intensitas ?? '',
+    kode_lead:         lead.kode_lead ?? '',
+    tanggal:           lead.tanggal,
+    nama:              lead.nama,
+    pic:               lead.pic ?? '',
+    perusahaan:        lead.perusahaan,
+    kebutuhan:         lead.kebutuhan ?? '',
+    sumber:            lead.sumber,
+    estimasi:          lead.estimasi,
+    status:            lead.status,
+    phone:             lead.phone ?? '',
+    email:             lead.email ?? '',
+    lokasi:            lead.lokasi ?? '',
+    catatan:           lead.catatan ?? '',
+    tipe_proyek:       lead.tipe_proyek ?? '',
+    skala:             lead.skala ?? '',
+    intensitas:        lead.intensitas ?? '',
+    tipe_kontrak:      lead.tipe_kontrak ?? 'Langsung',
+    sewa_durasi_bulan: lead.sewa_durasi_bulan ?? 12,
+    skema_pembayaran:  lead.skema_pembayaran ?? 'Bulanan',
+    sewa_mulai:        lead.sewa_mulai ?? lead.tanggal,
+    sewa_selesai:      lead.sewa_selesai ?? addMonthsToDate(lead.tanggal, lead.sewa_durasi_bulan ?? 12),
+    nominal_per_bulan: lead.nominal_per_bulan ?? null,
   }
   picSearch.value = lead.pic ?? ''
   clientSearch.value = lead.nama
@@ -267,9 +299,20 @@ async function submitForm() {
   }
 
   try {
+    const isSewa = form.value.tipe_kontrak === 'Sewa'
+    const durasi = isSewa ? Number(form.value.sewa_durasi_bulan || 12) : undefined
+    const estimasiVal = form.value.estimasi ? Number(form.value.estimasi) : null
+    const nominalPerBln = (isSewa && estimasiVal && durasi) ? Math.round(estimasiVal / durasi) : undefined
+
     const payload = {
       ...form.value,
-      estimasi: form.value.estimasi ? Number(form.value.estimasi) : null,
+      estimasi:          estimasiVal,
+      tipe_kontrak:      form.value.tipe_kontrak,
+      sewa_durasi_bulan: durasi,
+      skema_pembayaran:  isSewa ? form.value.skema_pembayaran : undefined,
+      sewa_mulai:        isSewa ? form.value.sewa_mulai : undefined,
+      sewa_selesai:      isSewa ? form.value.sewa_selesai : undefined,
+      nominal_per_bulan: nominalPerBln,
     }
     if (editId.value !== null) {
       await leadsApi.update(editId.value, payload)
@@ -362,6 +405,33 @@ const sourceClass = (s: LeadSumber) => `source-${s.toLowerCase().replace(/\s+/g,
           placeholder="Cari nama, perusahaan, kebutuhan, sumber..."
         />
       </div>
+      <!-- Tipe Kontrak Tabs -->
+      <div class="crm-contract-tabs">
+        <button
+          type="button"
+          class="crm-contract-tab"
+          :class="{ active: filterTipeKontrak === '' }"
+          @click="filterTipeKontrak = ''"
+        >
+          Semua
+        </button>
+        <button
+          type="button"
+          class="crm-contract-tab"
+          :class="{ active: filterTipeKontrak === 'Langsung' }"
+          @click="filterTipeKontrak = 'Langsung'"
+        >
+          Langsung
+        </button>
+        <button
+          type="button"
+          class="crm-contract-tab"
+          :class="{ active: filterTipeKontrak === 'Sewa' }"
+          @click="filterTipeKontrak = 'Sewa'"
+        >
+          <Repeat :size="12" /> Sewa IT
+        </button>
+      </div>
       <div class="crm-status-filter-wrap">
         <select v-model="filterStatus" class="crm-status-filter">
           <option value="">Semua Status</option>
@@ -423,7 +493,13 @@ const sourceClass = (s: LeadSumber) => `source-${s.toLowerCase().replace(/\s+/g,
 
             <!-- Client & Perusahaan -->
             <td class="client-cell">
-              <div class="client-name">{{ lead.nama }}</div>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <div class="client-name">{{ lead.nama }}</div>
+                <span v-if="lead.tipe_kontrak === 'Sewa'" class="badge-sewa-mini" title="Kontrak Sewa IT">
+                  <Repeat :size="10" /> Sewa {{ lead.sewa_durasi_bulan ? lead.sewa_durasi_bulan + ' Bln' : '' }}
+                </span>
+                <span v-else class="badge-langsung-mini">Langsung</span>
+              </div>
               <div class="client-company">
                 <Building2 :size="11" style="color:var(--text-muted)" />
                 {{ lead.perusahaan }}
@@ -440,7 +516,12 @@ const sourceClass = (s: LeadSumber) => `source-${s.toLowerCase().replace(/\s+/g,
             </td>
 
             <!-- Estimasi -->
-            <td class="estimasi-cell">{{ fmtRp(lead.estimasi) }}</td>
+            <td class="estimasi-cell">
+              <div>{{ fmtRp(lead.estimasi) }}</div>
+              <div v-if="lead.tipe_kontrak === 'Sewa' && (lead.nominal_per_bulan || (lead.estimasi && lead.sewa_durasi_bulan))" style="font-size: 11px; color: #c084fc; font-weight: normal; margin-top: 2px;">
+                ≈ Rp {{ (lead.nominal_per_bulan || Math.round((lead.estimasi || 0) / (lead.sewa_durasi_bulan || 12))).toLocaleString('id-ID') }}/bln
+              </div>
+            </td>
 
             <!-- Status -->
             <td>
@@ -510,6 +591,82 @@ const sourceClass = (s: LeadSumber) => `source-${s.toLowerCase().replace(/\s+/g,
 
           <!-- Body -->
           <div class="modal-body">
+
+            <!-- Model Kontrak: Langsung vs Sewa -->
+            <div class="contract-type-selector">
+              <label class="form-label" style="margin-bottom: 8px;">Model Kontrak / Penjualan</label>
+              <div class="type-segment">
+                <button
+                  type="button"
+                  class="type-btn"
+                  :class="{ active: form.tipe_kontrak === 'Langsung' }"
+                  @click="form.tipe_kontrak = 'Langsung'"
+                >
+                  💼 Langsung (Beli Putus / Standar)
+                </button>
+                <button
+                  type="button"
+                  class="type-btn"
+                  :class="{ active: form.tipe_kontrak === 'Sewa' }"
+                  @click="form.tipe_kontrak = 'Sewa'"
+                >
+                  <Repeat :size="13" style="display:inline; margin-right:4px;" /> Sewa (Rental IT / Layanan Berkala)
+                </button>
+              </div>
+            </div>
+
+            <!-- Sewa Configuration Box (If Sewa) -->
+            <div v-if="form.tipe_kontrak === 'Sewa'" class="sewa-box">
+              <div class="sewa-box-title">
+                <Repeat :size="16" style="color: #a855f7;" />
+                Pengaturan Sewa &amp; Pembayaran
+              </div>
+
+              <!-- Periode Sewa -->
+              <div class="form-row">
+                <div class="form-field">
+                  <label class="form-label">Tanggal Mulai Sewa</label>
+                  <input v-model="form.sewa_mulai" type="date" class="form-input" @change="onSewaDurasiChange(form.sewa_durasi_bulan)" />
+                </div>
+                <div class="form-field">
+                  <label class="form-label">Tanggal Selesai Sewa</label>
+                  <input v-model="form.sewa_selesai" type="date" class="form-input" />
+                </div>
+              </div>
+
+              <!-- Durasi & Skema -->
+              <div class="form-row">
+                <div class="form-field">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <label class="form-label" style="margin: 0;">Durasi Sewa (Bulan) *</label>
+                    <div style="display: flex; gap: 4px;">
+                      <button type="button" class="btn-quick-durasi" @click="onSewaDurasiChange(6)">6 Bln</button>
+                      <button type="button" class="btn-quick-durasi" @click="onSewaDurasiChange(12)">12 Bln (1 Thn)</button>
+                      <button type="button" class="btn-quick-durasi" @click="onSewaDurasiChange(24)">24 Bln (2 Thn)</button>
+                    </div>
+                  </div>
+                  <input v-model.number="form.sewa_durasi_bulan" type="number" min="1" class="form-input" @input="onSewaDurasiChange(form.sewa_durasi_bulan)" />
+                </div>
+                <div class="form-field">
+                  <label class="form-label">Skema Pembayaran</label>
+                  <select v-model="form.skema_pembayaran" class="form-select">
+                    <option value="Bulanan">Bulanan (Cicil per bulan)</option>
+                    <option value="Sekaligus">Sekaligus (Lunas di muka)</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Simulasi Cicilan Bulanan -->
+              <div v-if="form.estimasi && form.estimasi > 0 && form.sewa_durasi_bulan > 0" class="sewa-sim-banner">
+                <span style="font-size: 12px; color: #d8b4fe;">Simulasi Cicilan Sewa:</span>
+                <strong style="color: #4ade80; font-family: monospace; font-size: 13.5px; margin: 0 6px;">
+                  Rp {{ Math.round(form.estimasi / form.sewa_durasi_bulan).toLocaleString('id-ID') }} / bulan
+                </strong>
+                <span style="font-size: 11px; color: var(--text-muted);">
+                  ({{ form.sewa_durasi_bulan }}x bayar dari estimasi total Rp {{ Number(form.estimasi).toLocaleString('id-ID') }})
+                </span>
+              </div>
+            </div>
 
             <!-- Row 1: Tanggal | Sumber -->
             <div class="form-row form-row-2">
@@ -818,4 +975,135 @@ const sourceClass = (s: LeadSumber) => `source-${s.toLowerCase().replace(/\s+/g,
 .sk-block { animation: pulse 1.5s ease infinite; min-height: 72px; }
 .sk-row { height: 52px; border-bottom: 1px solid var(--border-color); background: rgba(255,255,255,0.02); animation: pulse 1.5s ease infinite; }
 @keyframes pulse { 0%,100% { opacity: 0.5 } 50% { opacity: 1 } }
+
+/* ── Contract Type Tabs ── */
+.crm-contract-tabs {
+  display: flex;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  gap: 2px;
+}
+.crm-contract-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s;
+}
+.crm-contract-tab:hover {
+  color: var(--text-primary);
+}
+.crm-contract-tab.active {
+  background: rgba(168, 85, 247, 0.2);
+  color: #e9d5ff;
+}
+
+/* ── Badges ── */
+.badge-sewa-mini {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.badge-langsung-mini {
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+/* ── Contract Modal Selectors ── */
+.contract-type-selector {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.type-segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.type-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.type-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+.type-btn.active {
+  background: rgba(168, 85, 247, 0.18);
+  border-color: #a855f7;
+  color: #f3e8ff;
+}
+.sewa-box {
+  background: rgba(168, 85, 247, 0.05);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+.sewa-box-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #d8b4fe;
+  margin-bottom: 12px;
+}
+.btn-quick-durasi {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-quick-durasi:hover {
+  background: rgba(168, 85, 247, 0.2);
+  color: #e9d5ff;
+  border-color: #a855f7;
+}
+.sewa-sim-banner {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 </style>

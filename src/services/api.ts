@@ -896,12 +896,18 @@ export interface ProyekResponse {
   nilai_format: string
   progress: number
   status: StatusProyek
+  status_pembayaran?: 'Belum Dibayar' | 'Sebagian' | 'Lunas' | string
+  total_dibayar?: number
+  total_dibayar_format?: string
+  sisa_pembayaran?: number
+  sisa_pembayaran_format?: string
   penawaran_id: number | null
   created_by: number | null
   created_at: string
   updated_at: string
   tim?: ProyekTimResponse[]
   perpanjangan_sewas?: ProyekSewaPerpanjanganResponse[]
+  pembayarans?: ProyekPembayaranResponse[]
 }
 
 export interface ProyekStatsResponse {
@@ -981,6 +987,23 @@ export const proyeksApi = {
     jatuh_tempo_hari?: number
   }) {
     return request<{ message: string; count: number }>('POST', `/proyeks/${id}/generate-sewa-invoices`, payload as unknown as Record<string, unknown>)
+  },
+  bayarLangsung(id: number, payload: {
+    nominal?: number
+    tanggal_bayar?: string
+    metode_pembayaran?: string
+    catatan?: string
+    masuk_pembukuan?: boolean
+    status_pembayaran?: 'Lunas' | 'Sebagian' | 'Belum Dibayar'
+  }) {
+    return request<{ message: string; data: ProyekResponse; pembayaran?: ProyekPembayaranResponse }>(
+      'POST', `/proyeks/${id}/bayar-langsung`, payload as unknown as Record<string, unknown>
+    )
+  },
+  updateStatusPembayaran(id: number, status_pembayaran: string) {
+    return request<{ message: string; data: ProyekResponse }>(
+      'PATCH', `/proyeks/${id}/status-pembayaran`, { status_pembayaran }
+    )
   },
   delete(id: number) {
     return request<{ message: string }>('DELETE', `/proyeks/${id}`)
@@ -1115,6 +1138,16 @@ export interface ProyekInvoiceResponse {
   subtotal: number
   total_harga: number
   items: ProyekInvoiceItem[]
+  pembayaran?: {
+    id: number
+    nomor_pembayaran: string | null
+    tanggal_bayar: string | null
+    nominal: number
+    metode_pembayaran: string
+    catatan: string | null
+    transaction_id: number | null
+    masuk_pembukuan: boolean
+  } | null
 }
 
 export const proyekInvoicesApi = {
@@ -1130,11 +1163,100 @@ export const proyekInvoicesApi = {
   update(proyekId: number, invoiceId: number, payload: any) {
     return request<{ message: string; data: ProyekInvoiceResponse }>('PUT', `/proyeks/${proyekId}/invoices/${invoiceId}`, payload)
   },
-  updateStatus(proyekId: number, invoiceId: number, status: InvoiceStatus) {
-    return request<{ message: string; data: ProyekInvoiceResponse }>('PATCH', `/proyeks/${proyekId}/invoices/${invoiceId}/status`, { status })
+  updateStatus(proyekId: number, invoiceId: number, status: InvoiceStatus, paymentData?: { tanggal_bayar?: string; nominal?: number; metode_pembayaran?: string; catatan?: string; masuk_pembukuan?: boolean }) {
+    return request<{ message: string; data: ProyekInvoiceResponse }>('PATCH', `/proyeks/${proyekId}/invoices/${invoiceId}/status`, { status, ...paymentData })
+  },
+  bayar(proyekId: number, invoiceId: number, payload: { tanggal_bayar: string; nominal: number; metode_pembayaran: string; catatan?: string; masuk_pembukuan?: boolean }) {
+    return request<{ message: string; data: ProyekInvoiceResponse; pembayaran: any }>('POST', `/proyeks/${proyekId}/invoices/${invoiceId}/bayar`, payload)
   },
   delete(proyekId: number, invoiceId: number) {
     return request<{ message: string }>('DELETE', `/proyeks/${proyekId}/invoices/${invoiceId}`)
+  },
+}
+
+// ─── Proyek Pembayaran & Jadwal Sewa ─────────────────────────────────────────
+export interface ProyekPembayaranResponse {
+  id: number
+  proyek_id: number
+  proyek_invoice_id: number | null
+  nomor_invoice?: string | null
+  transaction_id: number | null
+  nomor_pembayaran: string | null
+  bulan_ke: number | null
+  periode_bulan: string | null
+  tanggal_bayar: string
+  nominal: number
+  nominal_format: string
+  metode_pembayaran: string
+  catatan: string | null
+  bukti_bayar: string | null
+  masuk_pembukuan: boolean
+  created_by: string
+  created_at: string
+}
+
+export interface SewaJadwalItem {
+  bulan_ke: number
+  periode_bulan: string
+  tanggal_periode: string
+  tanggal_jatuh_tempo: string
+  nominal_tagihan: number
+  nominal_tagihan_format: string
+  status: 'Lunas' | 'Jatuh Tempo' | 'Menunggu Bayar' | 'Belum Dibayar'
+  is_paid: boolean
+  is_overdue: boolean
+  pembayaran: ProyekPembayaranResponse | null
+  invoice: {
+    id: number
+    nomor_invoice: string
+    status: string
+    total_harga: number
+  } | null
+}
+
+export interface SewaJadwalSummary {
+  total_nilai_kontrak: number
+  total_nilai_kontrak_format: string
+  total_sudah_dibayar: number
+  total_sudah_dibayar_format: string
+  sisa_tagihan: number
+  sisa_tagihan_format: string
+  total_bulan: number
+  bulan_terbayar: number
+  bulan_sisa: number
+  persen_terbayar: number
+}
+
+export interface SewaJadwalResponse {
+  jadwal: SewaJadwalItem[]
+  summary: SewaJadwalSummary
+  proyek: {
+    id: number
+    kode: string
+    nama: string
+    sewa_mulai: string | null
+    sewa_selesai: string | null
+    sewa_durasi_bulan: number
+    skema_pembayaran: string | null
+    status_sewa: string | null
+  }
+}
+
+export const proyekPembayaransApi = {
+  list(proyekId: number) {
+    return request<{ data: ProyekPembayaranResponse[]; total_dibayar: number }>('GET', `/proyeks/${proyekId}/pembayarans`)
+  },
+  sewaJadwal(proyekId: number) {
+    return request<{ data: SewaJadwalResponse }>('GET', `/proyeks/${proyekId}/sewa-jadwal`)
+  },
+  create(proyekId: number, payload: Partial<ProyekPembayaranResponse> | FormData) {
+    return request<{ message: string; data: ProyekPembayaranResponse }>('POST', `/proyeks/${proyekId}/pembayarans`, payload as any)
+  },
+  update(proyekId: number, pembayaranId: number, payload: Partial<ProyekPembayaranResponse>) {
+    return request<{ message: string; data: ProyekPembayaranResponse }>('PUT', `/proyeks/${proyekId}/pembayarans/${pembayaranId}`, payload as any)
+  },
+  delete(proyekId: number, pembayaranId: number) {
+    return request<{ message: string }>('DELETE', `/proyeks/${proyekId}/pembayarans/${pembayaranId}`)
   },
 }
 

@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import {
   ArrowLeft, Plus, Search, FileText, X, Trash2,
-  CheckCircle2, Clock, AlertCircle, Building2, Calendar, DollarSign, RefreshCw
+  CheckCircle2, Clock, AlertCircle, Building2, Calendar, DollarSign, RefreshCw,
+  BookOpen, CreditCard
 } from '@lucide/vue'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -205,16 +206,63 @@ const selected    = ref<ProyekInvoiceResponse | null>(null)
 const openDetail  = (inv: ProyekInvoiceResponse) => { selected.value = inv }
 const closeDetail = () => { selected.value = null }
 
-const markLunas = async (id: number) => {
+// ─── Bayar Invoice Modal (Otomatis ke Pembukuan) ─────────────────────────────
+const showBayarInvoiceModal = ref(false)
+const targetPayInvoice      = ref<ProyekInvoiceResponse | null>(null)
+const payForm = ref({
+  tanggal_bayar:     new Date().toISOString().slice(0, 10),
+  nominal:           0,
+  metode_pembayaran: 'Transfer Bank BCA',
+  catatan:           '',
+  masuk_pembukuan:   true,
+})
+
+const invoiceMetodeOptions = [
+  'Transfer Bank BCA',
+  'Transfer Bank Mandiri',
+  'Transfer Bank BRI',
+  'Transfer Bank BNI',
+  'Transfer Bank Lainnya',
+  'Tunai / Cash',
+  'QRIS',
+  'Lainnya',
+]
+
+const openBayarInvoiceModal = (inv: ProyekInvoiceResponse) => {
+  targetPayInvoice.value = inv
+  const total = totalAkhir(inv.items, inv.ppn)
+  payForm.value = {
+    tanggal_bayar:     new Date().toISOString().slice(0, 10),
+    nominal:           total,
+    metode_pembayaran: 'Transfer Bank BCA',
+    catatan:           `Pelunasan ${inv.nomor_invoice} - ${inv.perihal || ''}`,
+    masuk_pembukuan:   true,
+  }
+  showBayarInvoiceModal.value = true
+}
+
+const submitPayInvoice = async () => {
+  if (!targetPayInvoice.value) return
+  saving.value = true
   try {
-    const res = await proyekInvoicesApi.updateStatus(proyekId, id, 'Lunas')
+    const res = await proyekInvoicesApi.bayar(proyekId, targetPayInvoice.value.id, payForm.value)
+    showBayarInvoiceModal.value = false
+    alert(res.message || 'Pembayaran berhasil dicatat dan masuk ke Pembukuan!')
     await fetchData()
-    // Update selected if open
-    if (selected.value?.id === id) {
+    if (selected.value?.id === targetPayInvoice.value.id) {
       selected.value = { ...res.data }
     }
-  } catch(e:any) {
-    alert(e.message || 'Gagal tandai lunas')
+  } catch (e: any) {
+    alert(e.message || 'Gagal mencatat pembayaran')
+  } finally {
+    saving.value = false
+  }
+}
+
+const markLunas = async (id: number) => {
+  const inv = invoiceList.value.find(i => i.id === id)
+  if (inv) {
+    openBayarInvoiceModal(inv)
   }
 }
 
@@ -367,14 +415,20 @@ const goBack = () => router.push(`/admin/proyek/${proyekId}`)
             <div class="inv-lc-meta">
               <span class="inv-lc-meta-item"><Calendar :size="12" /> {{ formatDate(inv.tanggal) }}</span>
               <span class="inv-lc-meta-item"><Clock :size="12" /> Jatuh Tempo: <strong style="color:var(--text-primary);">{{ formatDate(inv.jatuh_tempo) }}</strong></span>
+              <span v-if="inv.pembayaran" class="inv-lc-meta-item" style="color:#4ade80; font-weight:600;">
+                <CheckCircle2 :size="12" /> Dibayar {{ formatDate(inv.pembayaran.tanggal_bayar) }} ({{ inv.pembayaran.metode_pembayaran }})
+              </span>
+              <span v-if="inv.pembayaran?.masuk_pembukuan" class="inv-lc-meta-item" style="color:#c084fc; font-weight:600;">
+                <BookOpen :size="12" /> Pembukuan #{{ inv.pembayaran.transaction_id }}
+              </span>
             </div>
           </div>
           <div class="inv-lc-right" @click.stop>
             <div class="inv-lc-total">{{ rp(totalAkhir(inv.items, inv.ppn)) }}</div>
             <div class="inv-lc-sub">{{ inv.items.length }} item · PPN {{ inv.ppn }}%</div>
             <div class="inv-lc-actions">
-              <button v-if="inv.status === 'Terkirim'" class="inv-lunas-btn" @click.stop="markLunas(inv.id)">
-                <CheckCircle2 :size="13" /> Tandai Lunas
+              <button v-if="inv.status === 'Terkirim'" class="inv-lunas-btn" @click.stop="openBayarInvoiceModal(inv)">
+                <CreditCard :size="13" /> Bayar / Lunas
               </button>
               <button class="inv-icon-btn" title="Edit" @click.stop="openEdit(inv)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -448,6 +502,25 @@ const goBack = () => router.push(`/admin/proyek/${proyekId}`)
               <div class="inv-summary-row"><span>PPN {{ selected.ppn }}%</span><span>{{ rp(totalSebelumPPN(selected.items) * selected.ppn / 100) }}</span></div>
               <div class="inv-summary-row inv-summary-total"><span>Total Invoice</span><span>{{ rp(totalAkhir(selected.items, selected.ppn)) }}</span></div>
             </div>
+            <div v-if="selected.pembayaran" style="margin-top:20px; padding:14px 16px; background:rgba(34,197,94,0.08); border-radius:10px; border:1px solid rgba(34,197,94,0.25);">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div style="font-size:13px; font-weight:700; color:#4ade80; display:flex; align-items:center; gap:6px;">
+                  <CheckCircle2 :size="15" /> Pembayaran Telah Lunas
+                </div>
+                <div v-if="selected.pembayaran.masuk_pembukuan" style="font-size:11.5px; color:#c084fc; display:flex; align-items:center; gap:4px; font-weight:600;">
+                  <BookOpen :size="13" /> Kas Masuk #{{ selected.pembayaran.transaction_id }}
+                </div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:12.5px; color:var(--text-secondary);">
+                <div>Tanggal: <strong style="color:var(--text-primary);">{{ formatDate(selected.pembayaran.tanggal_bayar) }}</strong></div>
+                <div>Nominal: <strong style="color:#4ade80; font-family:monospace;">{{ rp(selected.pembayaran.nominal) }}</strong></div>
+                <div>Metode: <strong style="color:var(--text-primary);">{{ selected.pembayaran.metode_pembayaran }}</strong></div>
+                <div>No. Bukti: <strong style="color:var(--text-primary); font-family:monospace;">{{ selected.pembayaran.nomor_pembayaran || '—' }}</strong></div>
+              </div>
+              <div v-if="selected.pembayaran.catatan" style="font-size:12px; color:var(--text-muted); margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.1);">
+                Catatan: {{ selected.pembayaran.catatan }}
+              </div>
+            </div>
             <div v-if="selected.catatan" style="margin-top:20px; padding:12px 14px; background:var(--bg-sidebar); border-radius:8px; border:1px solid var(--border-color);">
               <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px; font-weight:500; text-transform:uppercase; letter-spacing:0.06em;">Catatan</div>
               <p style="font-size:13px; color:var(--text-secondary);">{{ selected.catatan }}</p>
@@ -455,10 +528,10 @@ const goBack = () => router.push(`/admin/proyek/${proyekId}`)
           </div>
           <div class="modal-footer modal-footer-split">
             <button class="btn-ghost btn-half" @click="closeDetail">Tutup</button>
-            <button v-if="selected.status === 'Terkirim'" class="btn-primary btn-half" style="background:var(--accent-green);" @click="markLunas(selected.id); closeDetail()">
-              <CheckCircle2 :size="15" /> Tandai Lunas
+            <button v-if="selected.status === 'Terkirim'" class="btn-primary btn-half" style="background:var(--accent-green);" @click="openBayarInvoiceModal(selected!); closeDetail()">
+              <CreditCard :size="15" /> Catat Pembayaran
             </button>
-            <button v-else class="btn-primary btn-half" @click="openEdit(selected!); closeDetail()">Edit Invoice</button>
+            <button v-else-if="selected.status !== 'Lunas'" class="btn-primary btn-half" @click="openEdit(selected!); closeDetail()">Edit Invoice</button>
           </div>
         </div>
       </div>
@@ -568,6 +641,84 @@ const goBack = () => router.push(`/admin/proyek/${proyekId}`)
       </div>
     </Teleport>
 
+    <!-- ── Modal Catat Pembayaran Invoice (Otomatis ke Pembukuan) ── -->
+    <Teleport to="body">
+      <div v-if="showBayarInvoiceModal && targetPayInvoice" class="modal-overlay" @click.self="showBayarInvoiceModal = false">
+        <div class="modal-box" style="max-width: 520px;">
+          <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <CreditCard :size="18" style="color: #22c55e;" />
+              <h2 style="font-size: 16px; margin: 0;">Catat Pembayaran Invoice</h2>
+            </div>
+            <button class="modal-close" @click="showBayarInvoiceModal = false"><X :size="16" /></button>
+          </div>
+
+          <div class="modal-body">
+            <!-- Invoice Banner -->
+            <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-size: 13.5px; font-weight: 700; color: #93c5fd; font-family: monospace;">
+                  {{ targetPayInvoice.nomor_invoice }}
+                </span>
+                <span style="font-size: 14px; font-weight: 700; color: #4ade80; font-family: monospace;">
+                  {{ rp(totalAkhir(targetPayInvoice.items, targetPayInvoice.ppn)) }}
+                </span>
+              </div>
+              <div style="font-size: 12px; color: var(--text-secondary);">
+                {{ targetPayInvoice.perihal || 'Invoice Proyek' }}
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-field">
+                <label class="form-label">Tanggal Pembayaran *</label>
+                <input v-model="payForm.tanggal_bayar" type="date" class="form-input" />
+              </div>
+              <div class="form-field">
+                <label class="form-label">Nominal (Rp) *</label>
+                <input v-model.number="payForm.nominal" type="number" min="1000" class="form-input" />
+              </div>
+            </div>
+
+            <div class="form-row single">
+              <div class="form-field">
+                <label class="form-label">Metode Pembayaran *</label>
+                <select v-model="payForm.metode_pembayaran" class="form-input">
+                  <option v-for="m in invoiceMetodeOptions" :key="m" :value="m">{{ m }}</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row single">
+              <div class="form-field">
+                <label class="form-label">Catatan / Keterangan Transfer</label>
+                <input v-model="payForm.catatan" type="text" class="form-input" placeholder="Misal: Transfer BCA a/n Client ref #1234" />
+              </div>
+            </div>
+
+            <!-- Auto sync checkbox info box -->
+            <div style="background: rgba(147, 51, 234, 0.08); border: 1px solid rgba(147, 51, 234, 0.25); border-radius: 8px; padding: 12px 14px;">
+              <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+                <input type="checkbox" v-model="payForm.masuk_pembukuan" style="margin-top: 3px; accent-color: #9333ea; width: 16px; height: 16px;" />
+                <div>
+                  <div style="font-weight: 600; color: #f3e8ff; font-size: 13px;">Otomatis catat kas masuk ke Pembukuan</div>
+                  <div style="font-size: 12px; color: #c084fc; line-height: 1.4; margin-top: 2px;">
+                    Sistem akan otomatis mencatat transaksi kas masuk di Pembukuan dengan kategori "Pembayaran Client" dan nominal yang sesuai.
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="modal-footer modal-footer-split">
+            <button class="btn-ghost btn-half" @click="showBayarInvoiceModal = false" :disabled="saving">Batal</button>
+            <button class="btn-primary btn-half" style="background: var(--accent-green);" @click="submitPayInvoice" :disabled="saving">
+              {{ saving ? 'Menyimpan...' : 'Tandai Lunas & Sinkron Pembukuan' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </AdminLayout>
 </template>
 

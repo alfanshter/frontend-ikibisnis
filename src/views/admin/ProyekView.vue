@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
-import { Search, Plus, Wrench, User, Calendar, X, Pencil, Trash2, RefreshCw, AlertCircle, Repeat, Clock, DollarSign } from '@lucide/vue'
+import { Search, Plus, Wrench, User, Calendar, X, Pencil, Trash2, RefreshCw, AlertCircle, Repeat, Clock, DollarSign, CheckCircle2, CreditCard } from '@lucide/vue'
 import {
   proyeksApi,
   type ProyekResponse, type StatusProyek, type ProyekPayload,
@@ -258,6 +258,58 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
     deletingId.value = null
   }
 }
+
+// ─── Quick Bayar Proyek Langsung ──────────────────────────────────────────────
+const showQuickBayarModal = ref(false)
+const quickBayarTarget    = ref<ProyekResponse | null>(null)
+const quickBayarSaving    = ref(false)
+const quickBayarForm      = ref({
+  nominal: 0,
+  tanggal_bayar: new Date().toISOString().slice(0, 10),
+  metode_pembayaran: 'Transfer Bank BCA',
+  catatan: '',
+  masuk_pembukuan: true,
+})
+
+const openQuickBayar = (p: ProyekResponse, e: Event) => {
+  e.stopPropagation()
+  quickBayarTarget.value = p
+  const sisa = (p.sisa_pembayaran !== undefined && p.sisa_pembayaran > 0)
+    ? p.sisa_pembayaran
+    : (p.nilai || 0)
+  quickBayarForm.value = {
+    nominal: sisa > 0 ? sisa : (p.nilai || 0),
+    tanggal_bayar: new Date().toISOString().slice(0, 10),
+    metode_pembayaran: 'Transfer Bank BCA',
+    catatan: `Pelunasan proyek ${p.nama}`,
+    masuk_pembukuan: true,
+  }
+  showQuickBayarModal.value = true
+}
+
+const submitQuickBayar = async () => {
+  if (!quickBayarTarget.value) return
+  if (!quickBayarForm.value.nominal || quickBayarForm.value.nominal <= 0) {
+    alert('Masukkan nominal pembayaran yang valid')
+    return
+  }
+  quickBayarSaving.value = true
+  try {
+    const res = await proyeksApi.bayarLangsung(quickBayarTarget.value.id, quickBayarForm.value)
+    showQuickBayarModal.value = false
+    alert(res.message || 'Pembayaran proyek berhasil dicatat dan masuk ke Pembukuan!')
+    await fetchProyeks()
+  } catch (e: any) {
+    alert(e.message || 'Gagal mencatat pembayaran')
+  } finally {
+    quickBayarSaving.value = false
+  }
+}
+
+const formatRupiah = (val?: number | null) => {
+  if (!val && val !== 0) return 'Rp 0'
+  return 'Rp ' + Number(val).toLocaleString('id-ID')
+}
 </script>
 
 
@@ -346,6 +398,14 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
             <span v-if="p.tipe_kontrak === 'Sewa'" class="badge badge-sewa">
               <Repeat :size="11" /> Sewa {{ p.sewa_durasi_bulan ? p.sewa_durasi_bulan + ' Bln' : '' }}
             </span>
+            <span
+              v-else
+              class="badge"
+              :class="p.status_pembayaran === 'Lunas' ? 'badge-bayar-lunas' : (p.status_pembayaran === 'Sebagian' ? 'badge-bayar-sebagian' : 'badge-bayar-belum')"
+              :title="p.status_pembayaran === 'Lunas' ? 'Lunas: ' + (p.total_dibayar_format || p.nilai_format) : 'Sisa: ' + (p.sisa_pembayaran_format || p.nilai_format)"
+            >
+              {{ p.status_pembayaran === 'Lunas' ? '✓ Lunas' : (p.status_pembayaran === 'Sebagian' ? 'Sebagian' : 'Belum Dibayar') }}
+            </span>
           </div>
           <span :class="badgeClass(p.status)">{{ p.status }}</span>
         </div>
@@ -379,6 +439,14 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
         </div>
         <!-- action buttons -->
         <div class="card-actions" @click.stop>
+          <button
+            v-if="p.tipe_kontrak !== 'Sewa' && p.status_pembayaran !== 'Lunas'"
+            class="card-action-btn pay-btn"
+            @click="openQuickBayar(p, $event)"
+            title="Tandai Dibayar (Sinkron ke Pembukuan)"
+          >
+            <CheckCircle2 :size="12" /> Bayar
+          </button>
           <button class="card-action-btn" @click="openEdit(p, $event)" title="Edit"><Pencil :size="13" /></button>
           <button class="card-action-btn danger" @click="deleteProyek(p, $event)" :disabled="deletingId === p.id" title="Hapus"><Trash2 :size="13" /></button>
         </div>
@@ -573,6 +641,125 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
           </div>
         </div>
       </div>
+
+      <!-- ── Modal Quick Bayar Proyek Langsung ──────────────────────── -->
+      <div v-if="showQuickBayarModal" class="modal-overlay" @click.self="showQuickBayarModal = false">
+        <div class="modal-box" style="max-width: 520px;">
+          <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <CheckCircle2 :size="18" style="color: #4ade80;" />
+              <h2 style="font-size: 16px; margin: 0;">Tandai Proyek Langsung Dibayar</h2>
+            </div>
+            <button class="modal-close" @click="showQuickBayarModal = false"><X :size="16" /></button>
+          </div>
+
+          <div class="modal-body">
+            <div class="pay-modal-banner" style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px;">
+              <div style="font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 4px;">
+                {{ quickBayarTarget?.kode }} — {{ quickBayarTarget?.nama }}
+              </div>
+              <div style="font-size: 12px; color: var(--text-secondary); display: flex; gap: 14px; flex-wrap: wrap;">
+                <span>Nilai: <strong style="color: var(--accent-orange);">{{ quickBayarTarget?.nilai_format }}</strong></span>
+                <span>Sudah Dibayar: <strong style="color: #4ade80;">{{ quickBayarTarget?.total_dibayar_format || 'Rp 0' }}</strong></span>
+                <span>Sisa: <strong style="color: #ef4444;">{{ quickBayarTarget?.sisa_pembayaran_format || 'Rp 0' }}</strong></span>
+              </div>
+            </div>
+
+            <!-- Form Fields -->
+            <div class="form-row single">
+              <div class="form-field">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <label class="form-label" style="margin: 0;">Nominal Pembayaran (Rp) *</label>
+                  <button
+                    v-if="quickBayarTarget && quickBayarTarget.sisa_pembayaran && quickBayarTarget.sisa_pembayaran > 0"
+                    type="button"
+                    class="btn-text-quick"
+                    style="background:none; border:none; color:#4ade80; font-size:11px; cursor:pointer; text-decoration:underline;"
+                    @click="quickBayarForm.nominal = quickBayarTarget.sisa_pembayaran"
+                  >
+                    Set Sisa Tagihan ({{ quickBayarTarget.sisa_pembayaran_format }})
+                  </button>
+                </div>
+                <input
+                  v-model.number="quickBayarForm.nominal"
+                  type="number"
+                  class="form-input"
+                  min="1"
+                  placeholder="Masukkan nominal bayar"
+                  required
+                />
+                <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
+                  Terbilang format: <strong style="color: #4ade80;">{{ formatRupiah(quickBayarForm.nominal) }}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row" style="margin-top: 12px;">
+              <div class="form-field">
+                <label class="form-label">Tanggal Pembayaran *</label>
+                <input v-model="quickBayarForm.tanggal_bayar" type="date" class="form-input" required />
+              </div>
+              <div class="form-field">
+                <label class="form-label">Metode Pembayaran *</label>
+                <select v-model="quickBayarForm.metode_pembayaran" class="form-select">
+                  <option value="Transfer Bank BCA">Transfer Bank BCA</option>
+                  <option value="Transfer Bank Mandiri">Transfer Bank Mandiri</option>
+                  <option value="Transfer Bank BRI">Transfer Bank BRI</option>
+                  <option value="Transfer Bank BNI">Transfer Bank BNI</option>
+                  <option value="Transfer Bank Lainnya">Transfer Bank Lainnya</option>
+                  <option value="Tunai / Cash">Tunai / Cash</option>
+                  <option value="QRIS">QRIS</option>
+                  <option value="Lainnya">Lainnya</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row single" style="margin-top: 12px;">
+              <div class="form-field">
+                <label class="form-label">Catatan / Keterangan</label>
+                <input
+                  v-model="quickBayarForm.catatan"
+                  type="text"
+                  class="form-input"
+                  placeholder="Contoh: Pelunasan via Transfer Bank"
+                />
+              </div>
+            </div>
+
+            <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 12px 14px; margin-top: 14px;">
+              <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+                <input
+                  v-model="quickBayarForm.masuk_pembukuan"
+                  type="checkbox"
+                  style="margin-top: 2px; accent-color: #22c55e; width: 16px; height: 16px;"
+                />
+                <div>
+                  <div style="font-size: 13px; font-weight: 600; color: #4ade80;">
+                    Otomatis Catat ke Pembukuan (Buku Kas Masuk)
+                  </div>
+                  <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.4;">
+                    Sistem akan otomatis mencatat kas masuk kategori "Pembayaran Client" di Pembukuan.
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="modal-footer modal-footer-split">
+            <button class="btn-ghost btn-half" @click="showQuickBayarModal = false" :disabled="quickBayarSaving">Batal</button>
+            <button
+              class="btn-primary btn-half"
+              style="background: linear-gradient(135deg, #16a34a, #15803d); border: none; font-weight: 600;"
+              @click="submitQuickBayar"
+              :disabled="quickBayarSaving"
+            >
+              <RefreshCw v-if="quickBayarSaving" :size="14" class="spin-icon" style="margin-right: 6px;" />
+              <CheckCircle2 v-else :size="14" style="margin-right: 6px;" />
+              {{ quickBayarSaving ? 'Menyimpan...' : 'Simpan &amp; Masuk Kas' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </Teleport>
   </AdminLayout>
 </template>
@@ -759,5 +946,47 @@ const deleteProyek = async (p: ProyekResponse, e: Event) => {
   font-size: 12.5px;
   color: var(--text-secondary);
   line-height: 1.5;
+}
+
+/* ── Payment Badges on Project Card ── */
+.badge-bayar-lunas {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  font-weight: 600;
+  font-size: 11px;
+}
+.badge-bayar-sebagian {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  font-weight: 600;
+  font-size: 11px;
+}
+.badge-bayar-belum {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.card-action-btn.pay-btn {
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+.card-action-btn.pay-btn:hover {
+  background: rgba(34, 197, 94, 0.25);
+  color: #fff;
+  border-color: #22c55e;
 }
 </style>

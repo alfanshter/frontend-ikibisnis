@@ -2,12 +2,19 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
-import { ArrowLeft, Trash2, Building2, User, Phone, Mail, Users, ChevronRight, Clock, ClipboardCheck, Handshake, CheckCircle2, PauseCircle, ShoppingCart, Package, DollarSign, Wallet, Receipt, FileText, AlertCircle, RefreshCw, Repeat, Sparkles, X, Plus, UserCircle, Shield, Globe } from '@lucide/vue'
+import {
+  ArrowLeft, Trash2, Building2, User, Phone, Mail, Users, ChevronRight,
+  Clock, ClipboardCheck, Handshake, CheckCircle2, PauseCircle, ShoppingCart,
+  Package, DollarSign, Wallet, Receipt, FileText, AlertCircle, RefreshCw,
+  Repeat, Sparkles, X, Plus, UserCircle, Shield, Globe, BookOpen, CreditCard, Eye
+} from '@lucide/vue'
 import {
   proyeksApi,
   proyekTimApi,
+  proyekPembayaransApi,
   usersApi,
-  type ProyekResponse, type StatusProyek, type UserResponse
+  type ProyekResponse, type StatusProyek, type UserResponse,
+  type SewaJadwalItem, type SewaJadwalSummary, type ProyekPembayaranResponse
 } from '@/services/api'
 import { getWaWebLink } from '@/utils/whatsapp'
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
@@ -97,6 +104,9 @@ async function fetchProyekDetail() {
   try {
     const res = await proyeksApi.show(proyekId)
     detailProyek.value = res.data
+    if (res.data.tipe_kontrak === 'Sewa') {
+      fetchSewaJadwal()
+    }
   } catch (e: any) {
     error.value = e.message || 'Gagal memuat detail proyek'
   } finally {
@@ -370,8 +380,180 @@ const convertToSewa = async () => {
     })
     detailProyek.value = res.data
     alert('Model proyek berhasil diubah menjadi Sewa!')
+    await fetchSewaJadwal()
   } catch (e: any) {
     alert(e.message || 'Gagal mengubah model proyek')
+  }
+}
+
+// ─── Sewa Jadwal & Pembayaran (Otomatis ke Pembukuan) ────────────────────────
+const sewaJadwalList    = ref<SewaJadwalItem[]>([])
+const sewaSummary       = ref<SewaJadwalSummary | null>(null)
+const loadingSewaJadwal = ref(false)
+
+async function fetchSewaJadwal() {
+  if (detailProyek.value?.tipe_kontrak !== 'Sewa') return
+  loadingSewaJadwal.value = true
+  try {
+    const res = await proyekPembayaransApi.sewaJadwal(proyekId)
+    sewaJadwalList.value = res.data.jadwal
+    sewaSummary.value = res.data.summary
+  } catch (e: any) {
+    console.error('Gagal memuat jadwal sewa:', e)
+  } finally {
+    loadingSewaJadwal.value = false
+  }
+}
+
+// ─── Modal Catat Pembayaran Sewa ─────────────────────────────────────────────
+const showBayarModal       = ref(false)
+const savingBayar          = ref(false)
+const errorBayar           = ref<string | null>(null)
+const selectedJadwalItem   = ref<SewaJadwalItem | null>(null)
+
+const metodeOptions = [
+  'Transfer Bank BCA',
+  'Transfer Bank Mandiri',
+  'Transfer Bank BRI',
+  'Transfer Bank BNI',
+  'Transfer Bank Lainnya',
+  'Tunai / Cash',
+  'QRIS',
+  'Lainnya',
+]
+
+const formBayar = ref({
+  bulan_ke:          1,
+  periode_bulan:     '',
+  tanggal_bayar:     new Date().toISOString().slice(0, 10),
+  nominal:           0,
+  metode_pembayaran: 'Transfer Bank BCA',
+  catatan:           '',
+  masuk_pembukuan:   true,
+})
+
+const openBayarModal = (item: SewaJadwalItem) => {
+  selectedJadwalItem.value = item
+  errorBayar.value = null
+  formBayar.value = {
+    bulan_ke:          item.bulan_ke,
+    periode_bulan:     item.periode_bulan,
+    tanggal_bayar:     new Date().toISOString().slice(0, 10),
+    nominal:           item.nominal_tagihan,
+    metode_pembayaran: 'Transfer Bank BCA',
+    catatan:           `Pembayaran sewa ${item.periode_bulan} - ${detailProyek.value?.nama}`,
+    masuk_pembukuan:   true,
+  }
+  showBayarModal.value = true
+}
+
+const submitBayar = async () => {
+  if (!formBayar.value.nominal || formBayar.value.nominal <= 0) {
+    errorBayar.value = 'Nominal pembayaran wajib diisi dan lebih dari 0'
+    return
+  }
+  savingBayar.value = true
+  errorBayar.value = null
+  try {
+    const res = await proyekPembayaransApi.create(proyekId, formBayar.value)
+    showBayarModal.value = false
+    alert(res.message || 'Pembayaran berhasil dicatat dan otomatis masuk ke Pembukuan!')
+    await fetchSewaJadwal()
+  } catch (e: any) {
+    errorBayar.value = e.message || 'Gagal mencatat pembayaran'
+  } finally {
+    savingBayar.value = false
+  }
+}
+
+const deletePembayaran = async (pembayaranId: number) => {
+  if (!confirm('Hapus riwayat pembayaran ini? Catatan transaksi kas masuk di Pembukuan juga akan otomatis dihapus.')) return
+  try {
+    const res = await proyekPembayaransApi.delete(proyekId, pembayaranId)
+    alert(res.message || 'Pembayaran berhasil dihapus')
+    await fetchSewaJadwal()
+  } catch (e: any) {
+    alert(e.message || 'Gagal menghapus pembayaran')
+  }
+}
+
+// ─── Modal Detail Pembayaran ─────────────────────────────────────────────────
+const showDetailBayarModal     = ref(false)
+const activePembayaranDetail   = ref<ProyekPembayaranResponse | null>(null)
+
+const openDetailBayarModal = (pmt: ProyekPembayaranResponse | null) => {
+  if (!pmt) return
+  activePembayaranDetail.value = pmt
+  showDetailBayarModal.value = true
+}
+
+// ─── Pembayaran Proyek Langsung (Otomatis ke Pembukuan) ──────────────────────
+const showDirectPayModal = ref(false)
+const directPaySaving    = ref(false)
+const directPayForm      = ref({
+  nominal: 0,
+  tanggal_bayar: new Date().toISOString().slice(0, 10),
+  metode_pembayaran: 'Transfer Bank BCA',
+  catatan: '',
+  masuk_pembukuan: true,
+})
+
+const payPercent = computed(() => {
+  if (!detailProyek.value) return 0
+  if (detailProyek.value.status_pembayaran === 'Lunas') return 100
+  const nilai = detailProyek.value.nilai || 0
+  const paid = detailProyek.value.total_dibayar || 0
+  if (nilai <= 0) return paid > 0 ? 100 : 0
+  return Math.min(100, Math.round((paid / nilai) * 100))
+})
+
+const formatRupiah = (val?: number | null) => {
+  if (!val && val !== 0) return 'Rp 0'
+  return 'Rp ' + Number(val).toLocaleString('id-ID')
+}
+
+const openDirectPayModal = () => {
+  if (!detailProyek.value) return
+  const sisa = (detailProyek.value.sisa_pembayaran !== undefined && detailProyek.value.sisa_pembayaran > 0)
+    ? detailProyek.value.sisa_pembayaran
+    : (detailProyek.value.nilai || 0)
+  directPayForm.value = {
+    nominal: sisa > 0 ? sisa : (detailProyek.value.nilai || 0),
+    tanggal_bayar: new Date().toISOString().slice(0, 10),
+    metode_pembayaran: 'Transfer Bank BCA',
+    catatan: `Pelunasan proyek ${detailProyek.value.nama}`,
+    masuk_pembukuan: true,
+  }
+  showDirectPayModal.value = true
+}
+
+const submitDirectPayment = async () => {
+  if (!detailProyek.value) return
+  if (!directPayForm.value.nominal || directPayForm.value.nominal <= 0) {
+    alert('Masukkan nominal pembayaran yang valid')
+    return
+  }
+  directPaySaving.value = true
+  try {
+    const res = await proyeksApi.bayarLangsung(proyekId, directPayForm.value)
+    detailProyek.value = res.data
+    showDirectPayModal.value = false
+    alert(res.message || 'Pembayaran berhasil dicatat dan otomatis masuk ke Pembukuan!')
+  } catch (e: any) {
+    alert(e.message || 'Gagal mencatat pembayaran')
+  } finally {
+    directPaySaving.value = false
+  }
+}
+
+const hapusDirectPayment = async (pembayaranId: number) => {
+  if (!confirm('Hapus riwayat pembayaran ini? Catatan transaksi kas masuk di Pembukuan juga akan otomatis dihapus.')) return
+  try {
+    const res = await proyekPembayaransApi.delete(proyekId, pembayaranId)
+    alert(res.message || 'Pembayaran berhasil dihapus')
+    await fetchProyekDetail()
+  } catch (e: any) {
+    alert(e.message || 'Gagal menghapus pembayaran')
   }
 }
 </script>
@@ -408,11 +590,32 @@ const convertToSewa = async () => {
               <span v-if="detailProyek.tipe_kontrak === 'Sewa'" class="badge badge-sewa">
                 <Repeat :size="11" /> Sewa {{ detailProyek.sewa_durasi_bulan ? detailProyek.sewa_durasi_bulan + ' Bln' : '' }}
               </span>
+              <span v-else class="badge" style="background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;">
+                Proyek Langsung
+              </span>
+              <!-- Status Pembayaran Badge -->
+              <span
+                class="badge"
+                :class="detailProyek.status_pembayaran === 'Lunas' ? 'badge-bayar-lunas' : (detailProyek.status_pembayaran === 'Sebagian' ? 'badge-bayar-sebagian' : 'badge-bayar-belum')"
+                style="font-size: 11.5px; font-weight: 600; padding: 2px 10px; border-radius: 999px; display: inline-flex; align-items: center; gap: 4px;"
+              >
+                <CheckCircle2 v-if="detailProyek.status_pembayaran === 'Lunas'" :size="12" />
+                <Clock v-else :size="12" />
+                {{ detailProyek.status_pembayaran || 'Belum Dibayar' }}
+              </span>
             </div>
             <h1 style="font-size: 22px; color: var(--text-primary); margin: 4px 0 0; font-weight: 700;">{{ detailProyek.nama }}</h1>
           </div>
         </div>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button
+            v-if="detailProyek.tipe_kontrak !== 'Sewa' && detailProyek.status_pembayaran !== 'Lunas'"
+            class="btn-primary"
+            style="background: linear-gradient(135deg, #16a34a, #15803d); border: none; font-weight: 600; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(22,163,74,0.3);"
+            @click="openDirectPayModal"
+          >
+            <CheckCircle2 :size="15" /> Tandai Dibayar
+          </button>
           <button class="btn-primary" style="background: var(--bg-card); color: #ef4444; border: 1px solid var(--border-color); box-shadow: none;" @click="hapusProyek">
             <Trash2 :size="16" style="margin-right: 6px;" /> Hapus
           </button>
@@ -511,6 +714,331 @@ const convertToSewa = async () => {
                 </tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- ── Riwayat & Jadwal Pembayaran Sewa Bulanan (Otomatis ke Pembukuan) ── -->
+        <div style="margin-top: 28px; padding-top: 24px; border-top: 1px solid rgba(168,85,247,0.25);">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+            <div>
+              <h4 style="font-size: 15px; font-weight: 700; color: #f3e8ff; margin: 0 0 4px; display: flex; align-items: center; gap: 8px;">
+                <Wallet :size="18" style="color: #c084fc;" />
+                Riwayat &amp; Jadwal Pembayaran Sewa Bulanan
+                <span class="pembukuan-sync-badge">
+                  <BookOpen :size="12" /> Otomatis ke Pembukuan
+                </span>
+              </h4>
+              <p style="font-size: 12.5px; color: #d8b4fe; margin: 0;">
+                Pantau pembayaran sewa bulanan. Setiap pembayaran lunas akan otomatis dicatat sebagai kas masuk di Pembukuan.
+              </p>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <router-link to="/admin/pembukuan" class="btn-ghost-pembukuan" title="Buka buku kas / pembukuan">
+                <BookOpen :size="14" /> Buka Pembukuan →
+              </router-link>
+            </div>
+          </div>
+
+          <!-- Summary Mini-Cards -->
+          <div v-if="sewaSummary" class="sewa-pembayaran-summary-grid">
+            <div class="sewa-sum-card">
+              <div class="sewa-sum-label">Total Kontrak Sewa</div>
+              <div class="sewa-sum-val">{{ sewaSummary.total_nilai_kontrak_format }}</div>
+              <div class="sewa-sum-sub">{{ sewaSummary.total_bulan }} Bulan Kontrak</div>
+            </div>
+            <div class="sewa-sum-card highlight-green">
+              <div class="sewa-sum-label">Sudah Dibayar</div>
+              <div class="sewa-sum-val" style="color: #4ade80;">{{ sewaSummary.total_sudah_dibayar_format }}</div>
+              <div class="sewa-sum-sub" style="color: #86efac;">{{ sewaSummary.bulan_terbayar }} Bulan Terbayar ({{ sewaSummary.persen_terbayar }}%)</div>
+            </div>
+            <div class="sewa-sum-card highlight-orange">
+              <div class="sewa-sum-label">Sisa Tagihan Sewa</div>
+              <div class="sewa-sum-val" style="color: #fb923c;">{{ sewaSummary.sisa_tagihan_format }}</div>
+              <div class="sewa-sum-sub" style="color: #fdba74;">{{ sewaSummary.bulan_sisa }} Bulan Belum Dibayar</div>
+            </div>
+          </div>
+
+          <!-- Progress Bar -->
+          <div v-if="sewaSummary" style="margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; color: #e9d5ff;">
+              <span>Progress Pembayaran Sewa</span>
+              <span style="font-weight: 700; color: #a7f3d0;">{{ sewaSummary.bulan_terbayar }} / {{ sewaSummary.total_bulan }} Bulan Terbayar ({{ sewaSummary.persen_terbayar }}%)</span>
+            </div>
+            <div class="sewa-progress-track">
+              <div class="sewa-progress-fill" :style="{ width: `${sewaSummary.persen_terbayar}%` }"></div>
+            </div>
+          </div>
+
+          <!-- Schedule Table -->
+          <div v-if="loadingSewaJadwal" style="padding: 24px; text-align: center; color: #c084fc;">
+            <RefreshCw :size="18" class="spin-icon" style="margin: 0 auto 8px;" />
+            <div>Memuat jadwal pembayaran sewa...</div>
+          </div>
+          <div v-else class="sewa-history-table-wrap">
+            <table class="sewa-history-table sewa-bayar-table">
+              <thead>
+                <tr>
+                  <th>Periode / Bulan</th>
+                  <th>Jatuh Tempo</th>
+                  <th>Nominal Tagihan</th>
+                  <th>Status Bayar</th>
+                  <th>Riwayat Pembayaran</th>
+                  <th>Sinkronisasi Pembukuan</th>
+                  <th style="text-align: right;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in sewaJadwalList" :key="item.bulan_ke" :class="{ 'row-lunas': item.is_paid }">
+                  <td>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span class="bulan-ke-pill">Bulan {{ item.bulan_ke }}</span>
+                      <strong style="color: #fff; font-size: 13.5px;">{{ item.periode_bulan }}</strong>
+                    </div>
+                  </td>
+                  <td>
+                    <span style="font-size: 12.5px; color: var(--text-secondary);">{{ item.tanggal_jatuh_tempo }}</span>
+                  </td>
+                  <td>
+                    <strong style="color: #38bdf8; font-family: monospace; font-size: 13.5px;">{{ item.nominal_tagihan_format }}</strong>
+                  </td>
+                  <td>
+                    <span v-if="item.is_paid" class="status-bayar-badge lunas">
+                      <CheckCircle2 :size="12" /> Lunas
+                    </span>
+                    <span v-else-if="item.is_overdue" class="status-bayar-badge overdue">
+                      <AlertCircle :size="12" /> Jatuh Tempo
+                    </span>
+                    <span v-else class="status-bayar-badge pending">
+                      <Clock :size="12" /> Menunggu Bayar
+                    </span>
+                  </td>
+                  <td>
+                    <div v-if="item.pembayaran" style="font-size: 12px; line-height: 1.4;">
+                      <div style="color: #f3e8ff; font-weight: 600;">
+                        Dibayar: {{ item.pembayaran.tanggal_bayar }}
+                      </div>
+                      <div style="color: #c084fc; font-size: 11px;">
+                        {{ item.pembayaran.metode_pembayaran }} · <span style="font-family: monospace;">{{ item.pembayaran.nomor_pembayaran }}</span>
+                      </div>
+                    </div>
+                    <div v-else style="color: var(--text-muted); font-size: 12px; font-style: italic;">
+                      Belum ada pembayaran
+                    </div>
+                  </td>
+                  <td>
+                    <div v-if="item.pembayaran && item.pembayaran.masuk_pembukuan" class="pembukuan-tag">
+                      <BookOpen :size="12" />
+                      <span>Kas Masuk #{{ item.pembayaran.transaction_id }}</span>
+                    </div>
+                    <span v-else style="color: var(--text-muted); font-size: 12px;">—</span>
+                  </td>
+                  <td style="text-align: right;">
+                    <div style="display: flex; justify-content: flex-end; gap: 6px;">
+                      <button
+                        v-if="!item.is_paid"
+                        class="btn-bayar-now"
+                        @click="openBayarModal(item)"
+                        title="Catat pembayaran untuk bulan ini"
+                      >
+                        <CreditCard :size="13" /> Bayar Bulan Ini
+                      </button>
+                      <template v-else>
+                        <button
+                          class="btn-icon-soft"
+                          title="Lihat detail pembayaran"
+                          @click="openDetailBayarModal(item.pembayaran)"
+                        >
+                          <Eye :size="14" />
+                        </button>
+                        <button
+                          class="btn-icon-soft text-danger"
+                          title="Hapus pembayaran & batalkan di Pembukuan"
+                          @click="deletePembayaran(item.pembayaran.id)"
+                        >
+                          <Trash2 :size="14" />
+                        </button>
+                      </template>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Status & Pembayaran Proyek Langsung (Non-Sewa) ── -->
+      <div v-if="detailProyek.tipe_kontrak !== 'Sewa'" class="card card-direct-payment" style="padding: 24px; margin-bottom: 20px;">
+        <!-- Header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 20px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div class="direct-pay-icon" :class="detailProyek.status_pembayaran === 'Lunas' ? 'icon-lunas' : 'icon-pending'">
+              <CheckCircle2 v-if="detailProyek.status_pembayaran === 'Lunas'" :size="22" />
+              <CreditCard v-else :size="22" />
+            </div>
+            <div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-primary);">
+                  Status &amp; Pembayaran Proyek
+                </h3>
+                <span
+                  class="badge"
+                  :class="detailProyek.status_pembayaran === 'Lunas' ? 'badge-lunas-glow' : (detailProyek.status_pembayaran === 'Sebagian' ? 'badge-sebagian-glow' : 'badge-pending-glow')"
+                >
+                  {{ detailProyek.status_pembayaran === 'Lunas' ? '✓ LUNAS' : (detailProyek.status_pembayaran === 'Sebagian' ? 'SEBAGIAN' : 'BELUM DIBAYAR') }}
+                </span>
+              </div>
+              <div style="font-size: 12.5px; color: var(--text-muted); margin-top: 2px;">
+                Pelunasan proyek langsung otomatis tersinkronisasi ke Buku Kas Pembukuan
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button
+              v-if="detailProyek.status_pembayaran !== 'Lunas'"
+              class="btn-primary btn-pay-direct"
+              @click="openDirectPayModal"
+            >
+              <CheckCircle2 :size="15" style="margin-right: 6px;" /> Tandai Dibayar Sekarang
+            </button>
+            <button
+              v-else
+              class="btn-ghost"
+              style="border: 1px solid rgba(34,197,94,0.4); color: #4ade80; font-weight: 600;"
+              @click="openDirectPayModal"
+            >
+              <Plus :size="15" style="margin-right: 6px;" /> Tambah Pembayaran
+            </button>
+            <button
+              class="btn-ghost"
+              style="border: 1px solid var(--border-color); color: var(--text-secondary);"
+              @click="router.push('/admin/pembukuan')"
+              title="Buka Halaman Pembukuan"
+            >
+              <BookOpen :size="15" style="margin-right: 6px; color: var(--accent-orange);" /> Buka Pembukuan
+            </button>
+          </div>
+        </div>
+
+        <!-- 4 Stat Summary Cards -->
+        <div class="dp-pay-grid">
+          <div class="dp-pay-stat">
+            <div class="dp-pay-stat-label">Total Nilai Proyek</div>
+            <div class="dp-pay-stat-val val-total">{{ detailProyek.nilai_format || 'Rp 0' }}</div>
+            <div class="dp-pay-stat-sub">Sesuai nilai kontrak proyek</div>
+          </div>
+          <div class="dp-pay-stat">
+            <div class="dp-pay-stat-label">Total Sudah Dibayar</div>
+            <div class="dp-pay-stat-val val-paid">{{ detailProyek.total_dibayar_format || 'Rp 0' }}</div>
+            <div class="dp-pay-stat-sub" style="color: #4ade80; font-weight: 600;">
+              {{ payPercent }}% Terpenuhi
+            </div>
+          </div>
+          <div class="dp-pay-stat">
+            <div class="dp-pay-stat-label">Sisa Tagihan</div>
+            <div class="dp-pay-stat-val val-remaining">{{ detailProyek.sisa_pembayaran_format || 'Rp 0' }}</div>
+            <div class="dp-pay-stat-sub">
+              {{ detailProyek.status_pembayaran === 'Lunas' ? 'Lunas tanpa tunggakan' : 'Menunggu pelunasan klien' }}
+            </div>
+          </div>
+          <div class="dp-pay-stat">
+            <div class="dp-pay-stat-label">Sinkronisasi Pembukuan</div>
+            <div class="dp-pay-stat-val" style="font-size: 14px; display: flex; align-items: center; gap: 6px;">
+              <span v-if="(detailProyek.pembayarans || []).some(p => p.masuk_pembukuan)" style="color: #4ade80; display: inline-flex; align-items: center; gap: 5px; font-weight: 600;">
+                <CheckCircle2 :size="16" /> Otomatis Masuk Kas
+              </span>
+              <span v-else style="color: var(--text-muted); font-size: 13px;">Belum ada kas masuk</span>
+            </div>
+            <div class="dp-pay-stat-sub">Kategori: Pembayaran Client</div>
+          </div>
+        </div>
+
+        <!-- Progress Bar -->
+        <div style="margin: 18px 0 22px;">
+          <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">
+            <span>Progress Pelunasan</span>
+            <span style="font-weight: 600; color: var(--text-primary);">{{ payPercent }}%</span>
+          </div>
+          <div class="pay-prog-track">
+            <div class="pay-prog-fill" :style="{ width: payPercent + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- Riwayat Pembayaran Table / List -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 18px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+              <Receipt :size="15" style="color: var(--accent-orange);" /> Riwayat Pembayaran &amp; Kas Masuk
+            </h4>
+            <span style="font-size: 12px; color: var(--text-muted);">
+              {{ (detailProyek.pembayarans || []).length }} Transaksi
+            </span>
+          </div>
+
+          <!-- Table if payments exist -->
+          <div v-if="detailProyek.pembayarans && detailProyek.pembayarans.length > 0" class="pay-history-table-wrap">
+            <table class="pay-history-table">
+              <thead>
+                <tr>
+                  <th>No. Pembayaran</th>
+                  <th>Tanggal</th>
+                  <th>Metode</th>
+                  <th>Nominal</th>
+                  <th>Catatan</th>
+                  <th>Status Pembukuan</th>
+                  <th style="text-align: right;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="pmt in detailProyek.pembayarans" :key="pmt.id">
+                  <td style="font-family: monospace; font-weight: 600; color: var(--accent-orange);">
+                    {{ pmt.nomor_pembayaran }}
+                  </td>
+                  <td>{{ pmt.tanggal_bayar }}</td>
+                  <td>
+                    <span class="badge badge-metode">{{ pmt.metode_pembayaran }}</span>
+                  </td>
+                  <td style="font-family: monospace; font-weight: 700; color: #4ade80;">
+                    {{ pmt.nominal_format }}
+                  </td>
+                  <td style="color: var(--text-secondary); max-width: 220px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                    {{ pmt.catatan || '—' }}
+                  </td>
+                  <td>
+                    <router-link
+                      v-if="pmt.transaction_id"
+                      to="/admin/pembukuan"
+                      class="badge badge-tx-linked"
+                      title="Lihat transaksi ini di Pembukuan"
+                    >
+                      <CheckCircle2 :size="11" /> Kas Masuk #TX-{{ pmt.transaction_id }}
+                    </router-link>
+                    <span v-else style="color: var(--text-muted); font-size: 11px;">Tidak masuk kas</span>
+                  </td>
+                  <td style="text-align: right;">
+                    <button
+                      class="btn-icon-soft text-danger"
+                      @click="hapusDirectPayment(pmt.id)"
+                      title="Hapus pembayaran & batalkan di Pembukuan"
+                    >
+                      <Trash2 :size="14" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Empty State if no payments -->
+          <div v-else class="pay-history-empty">
+            <AlertCircle :size="18" style="color: var(--text-muted); flex-shrink: 0;" />
+            <div style="flex: 1; font-size: 13px; color: var(--text-secondary);">
+              Proyek ini belum memiliki riwayat pembayaran. Klik
+              <button class="btn-link-action" @click="openDirectPayModal">Tandai Dibayar</button>
+              untuk mencatat pelunasan dan langsung membuat transaksi kas masuk di Pembukuan.
+            </div>
           </div>
         </div>
       </div>
@@ -1032,6 +1560,280 @@ const convertToSewa = async () => {
             <button type="button" class="btn-ghost btn-half" @click="showAddMemberModal = false" :disabled="memberSaving">Batal</button>
             <button type="button" class="btn-primary btn-half" @click="handleAddMember" :disabled="memberSaving">
               {{ memberSaving ? 'Menyimpan...' : 'Tambahkan ke Tim' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ── Modal Catat Pembayaran Sewa Bulanan ── -->
+    <Teleport to="body">
+      <div v-if="showBayarModal" class="modal-overlay" @click.self="showBayarModal = false">
+        <div class="modal-box" style="max-width: 540px;">
+          <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <CreditCard :size="18" style="color: #c084fc;" />
+              <h2 style="font-size: 16px; margin: 0;">Catat Pembayaran Sewa Bulanan</h2>
+            </div>
+            <button class="modal-close" @click="showBayarModal = false"><X :size="16" /></button>
+          </div>
+
+          <div class="modal-body">
+            <!-- Period Header Banner -->
+            <div class="sewa-modal-banner" style="margin-bottom: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-size: 14px; font-weight: 700; color: #fff;">
+                  Bulan ke-{{ formBayar.bulan_ke }} · {{ formBayar.periode_bulan }}
+                </span>
+                <span class="pembukuan-sync-badge">
+                  <BookOpen :size="11" /> Kas Masuk Otomatis
+                </span>
+              </div>
+              <div style="font-size: 12px; color: #d8b4fe;">
+                Proyek: <strong>{{ detailProyek?.kode }} · {{ detailProyek?.nama }}</strong>
+              </div>
+            </div>
+
+            <!-- Tanggal & Nominal -->
+            <div class="form-row">
+              <div class="form-field">
+                <label class="form-label">Tanggal Pembayaran *</label>
+                <input v-model="formBayar.tanggal_bayar" type="date" class="form-input" />
+              </div>
+              <div class="form-field">
+                <label class="form-label">Nominal Pembayaran (Rp) *</label>
+                <input v-model.number="formBayar.nominal" type="number" min="1000" class="form-input" />
+              </div>
+            </div>
+
+            <!-- Metode Pembayaran -->
+            <div class="form-row single">
+              <div class="form-field">
+                <label class="form-label">Metode Pembayaran *</label>
+                <select v-model="formBayar.metode_pembayaran" class="form-input">
+                  <option v-for="m in metodeOptions" :key="m" :value="m">{{ m }}</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Catatan / Keterangan -->
+            <div class="form-row single">
+              <div class="form-field">
+                <label class="form-label">Catatan / Keterangan Transfer</label>
+                <input v-model="formBayar.catatan" type="text" class="form-input" placeholder="Misal: Bukti ref no 8837192 via m-BCA" />
+              </div>
+            </div>
+
+            <!-- Auto sync checkbox info box -->
+            <div class="sync-pembukuan-box">
+              <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+                <input type="checkbox" v-model="formBayar.masuk_pembukuan" style="margin-top: 3px; accent-color: #9333ea; width: 16px; height: 16px;" />
+                <div>
+                  <div style="font-weight: 600; color: #f3e8ff; font-size: 13px;">Otomatis catat ke Pembukuan (Kas Masuk)</div>
+                  <div style="font-size: 12px; color: #c084fc; line-height: 1.4; margin-top: 2px;">
+                    Sistem akan otomatis mencatat transaksi kas masuk di Pembukuan dengan kategori "Pembayaran Client" dan nominal yang sesuai.
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div v-if="errorBayar" style="color: #ef4444; font-size: 13px; margin-top: 10px;">{{ errorBayar }}</div>
+          </div>
+
+          <div class="modal-footer modal-footer-split">
+            <button class="btn-ghost btn-half" @click="showBayarModal = false" :disabled="savingBayar">Batal</button>
+            <button class="btn-primary btn-half btn-sewa-accent" @click="submitBayar" :disabled="savingBayar">
+              {{ savingBayar ? 'Menyimpan...' : 'Simpan & Masuk Pembukuan' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ── Modal Detail Pembayaran ── -->
+    <Teleport to="body">
+      <div v-if="showDetailBayarModal && activePembayaranDetail" class="modal-overlay" @click.self="showDetailBayarModal = false">
+        <div class="modal-box" style="max-width: 500px;">
+          <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <CheckCircle2 :size="18" style="color: #22c55e;" />
+              <h2 style="font-size: 16px; margin: 0;">Detail Pembayaran Sewa</h2>
+            </div>
+            <button class="modal-close" @click="showDetailBayarModal = false"><X :size="16" /></button>
+          </div>
+
+          <div class="modal-body">
+            <div class="sewa-modal-banner" style="background: rgba(34, 197, 94, 0.1); border-color: rgba(34, 197, 94, 0.25);">
+              <div style="font-size: 12px; color: #86efac; margin-bottom: 2px;">Nomor Bukti Pembayaran</div>
+              <div style="font-size: 16px; font-weight: 700; color: #4ade80; font-family: monospace;">
+                {{ activePembayaranDetail.nomor_pembayaran || '—' }}
+              </div>
+            </div>
+
+            <div class="dp-info-grid" style="margin-top: 16px;">
+              <div class="dp-info-item">
+                <div class="dp-info-label">Periode Sewa</div>
+                <div class="dp-info-value">Bulan ke-{{ activePembayaranDetail.bulan_ke }} ({{ activePembayaranDetail.periode_bulan || '—' }})</div>
+              </div>
+              <div class="dp-info-item">
+                <div class="dp-info-label">Tanggal Bayar</div>
+                <div class="dp-info-value">{{ activePembayaranDetail.tanggal_bayar }}</div>
+              </div>
+              <div class="dp-info-item">
+                <div class="dp-info-label">Nominal</div>
+                <div class="dp-info-value" style="color: #4ade80; font-weight: 700; font-family: monospace;">
+                  {{ activePembayaranDetail.nominal_format }}
+                </div>
+              </div>
+              <div class="dp-info-item">
+                <div class="dp-info-label">Metode Pembayaran</div>
+                <div class="dp-info-value">{{ activePembayaranDetail.metode_pembayaran }}</div>
+              </div>
+              <div class="dp-info-item" style="grid-column: 1 / -1;">
+                <div class="dp-info-label">Catatan</div>
+                <div class="dp-info-value">{{ activePembayaranDetail.catatan || '—' }}</div>
+              </div>
+            </div>
+
+            <div v-if="activePembayaranDetail.transaction_id" class="sync-pembukuan-box" style="margin-top: 16px;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <BookOpen :size="16" style="color: #c084fc;" />
+                  <span style="font-size: 13px; color: #f3e8ff;">Tercatat di Pembukuan (Kas Masuk #{{ activePembayaranDetail.transaction_id }})</span>
+                </div>
+                <router-link to="/admin/pembukuan" class="btn-ghost-pembukuan" style="font-size: 11px; padding: 4px 8px;">
+                  Buka Pembukuan →
+                </router-link>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button class="btn-ghost btn-half" style="width: 100%;" @click="showDetailBayarModal = false">Tutup</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Modal Tandai Proyek Langsung Dibayar ──────────────────────── -->
+      <div v-if="showDirectPayModal" class="modal-overlay" @click.self="showDirectPayModal = false">
+        <div class="modal-box" style="max-width: 540px;">
+          <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <CheckCircle2 :size="18" style="color: #4ade80;" />
+              <h2 style="font-size: 16px; margin: 0;">Tandai Proyek Langsung Dibayar</h2>
+            </div>
+            <button class="modal-close" @click="showDirectPayModal = false"><X :size="16" /></button>
+          </div>
+
+          <div class="modal-body">
+            <!-- Project Banner -->
+            <div class="pay-modal-banner">
+              <div style="font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 4px;">
+                {{ detailProyek?.kode }} — {{ detailProyek?.nama }}
+              </div>
+              <div style="font-size: 12px; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap;">
+                <span>Nilai Proyek: <strong style="color: var(--accent-orange);">{{ detailProyek?.nilai_format }}</strong></span>
+                <span>Sudah Dibayar: <strong style="color: #4ade80;">{{ detailProyek?.total_dibayar_format || 'Rp 0' }}</strong></span>
+                <span>Sisa Tagihan: <strong style="color: #ef4444;">{{ detailProyek?.sisa_pembayaran_format || 'Rp 0' }}</strong></span>
+              </div>
+            </div>
+
+            <!-- Form -->
+            <div class="form-row single" style="margin-top: 14px;">
+              <div class="form-field">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <label class="form-label" style="margin: 0;">Nominal Pembayaran (Rp) *</label>
+                  <button
+                    v-if="detailProyek && detailProyek.sisa_pembayaran && detailProyek.sisa_pembayaran > 0"
+                    type="button"
+                    class="btn-text-quick"
+                    @click="directPayForm.nominal = detailProyek.sisa_pembayaran"
+                  >
+                    Set Sisa Tagihan ({{ detailProyek.sisa_pembayaran_format }})
+                  </button>
+                </div>
+                <input
+                  v-model.number="directPayForm.nominal"
+                  type="number"
+                  class="form-input"
+                  min="1"
+                  placeholder="Masukkan nominal bayar"
+                  required
+                />
+                <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
+                  Terbilang format: <strong style="color: #4ade80;">{{ formatRupiah(directPayForm.nominal) }}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row" style="margin-top: 12px;">
+              <div class="form-field">
+                <label class="form-label">Tanggal Pembayaran *</label>
+                <input
+                  v-model="directPayForm.tanggal_bayar"
+                  type="date"
+                  class="form-input"
+                  required
+                />
+              </div>
+              <div class="form-field">
+                <label class="form-label">Metode Pembayaran *</label>
+                <select v-model="directPayForm.metode_pembayaran" class="form-input">
+                  <option value="Transfer Bank BCA">Transfer Bank BCA</option>
+                  <option value="Transfer Bank Mandiri">Transfer Bank Mandiri</option>
+                  <option value="Transfer Bank BRI">Transfer Bank BRI</option>
+                  <option value="Transfer Bank BNI">Transfer Bank BNI</option>
+                  <option value="Transfer Bank Lainnya">Transfer Bank Lainnya</option>
+                  <option value="Tunai / Cash">Tunai / Cash</option>
+                  <option value="QRIS">QRIS</option>
+                  <option value="Lainnya">Lainnya</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row single" style="margin-top: 12px;">
+              <div class="form-field">
+                <label class="form-label">Catatan / Keterangan</label>
+                <input
+                  v-model="directPayForm.catatan"
+                  type="text"
+                  class="form-input"
+                  placeholder="Contoh: Pelunasan 100% transfer BCA"
+                />
+              </div>
+            </div>
+
+            <!-- Checkbox Masuk Pembukuan -->
+            <div class="pembukuan-checkbox-box">
+              <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
+                <input
+                  v-model="directPayForm.masuk_pembukuan"
+                  type="checkbox"
+                  style="margin-top: 2px; accent-color: #22c55e; width: 16px; height: 16px;"
+                />
+                <div>
+                  <div style="font-size: 13px; font-weight: 600; color: #4ade80;">
+                    Otomatis Catat ke Pembukuan (Buku Kas Masuk)
+                  </div>
+                  <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.4;">
+                    Sistem akan otomatis mencatat transaksi kas masuk di Pembukuan dengan kategori "Pembayaran Client" dan nominal yang sesuai, terhubung ke proyek {{ detailProyek?.kode }}.
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button class="btn-ghost" @click="showDirectPayModal = false" :disabled="directPaySaving">Batal</button>
+            <button
+              class="btn-primary"
+              style="background: linear-gradient(135deg, #16a34a, #15803d); border: none; font-weight: 600; box-shadow: 0 4px 12px rgba(22,163,74,0.35);"
+              @click="submitDirectPayment"
+              :disabled="directPaySaving"
+            >
+              <RefreshCw v-if="directPaySaving" :size="14" class="spin-icon" style="margin-right: 6px;" />
+              <CheckCircle2 v-else :size="14" style="margin-right: 6px;" />
+              {{ directPaySaving ? 'Menyimpan...' : 'Simpan &amp; Masuk ke Pembukuan' }}
             </button>
           </div>
         </div>
@@ -1620,5 +2422,461 @@ const convertToSewa = async () => {
   background: rgba(59, 130, 246, 0.18);
   border-color: #3b82f6;
   color: #93c5fd;
+}
+
+/* ── Sewa Pembayaran & Sync Pembukuan ── */
+.pembukuan-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.btn-ghost-pembukuan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  background: rgba(168, 85, 247, 0.08);
+  color: #c084fc;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+.btn-ghost-pembukuan:hover {
+  background: rgba(168, 85, 247, 0.2);
+  border-color: #a855f7;
+  color: #f3e8ff;
+  transform: translateY(-1px);
+}
+
+.sewa-pembayaran-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sewa-sum-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(168, 85, 247, 0.18);
+  border-radius: 10px;
+  padding: 14px 16px;
+  transition: all 0.2s;
+}
+.sewa-sum-card.highlight-green {
+  border-color: rgba(34, 197, 94, 0.25);
+  background: rgba(34, 197, 94, 0.04);
+}
+.sewa-sum-card.highlight-orange {
+  border-color: rgba(249, 115, 22, 0.25);
+  background: rgba(249, 115, 22, 0.04);
+}
+.sewa-sum-label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.sewa-sum-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  font-family: monospace;
+  margin-bottom: 2px;
+}
+.sewa-sum-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sewa-progress-track {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.sewa-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #9333ea, #38bdf8, #22c55e);
+  border-radius: 999px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sewa-bayar-table th {
+  background: rgba(147, 51, 234, 0.12);
+  color: #d8b4fe;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 10px 14px;
+}
+.sewa-bayar-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  vertical-align: middle;
+}
+.sewa-bayar-table tr.row-lunas {
+  background: rgba(34, 197, 94, 0.03);
+}
+
+.bulan-ke-pill {
+  display: inline-block;
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.status-bayar-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+.status-bayar-badge.lunas {
+  background: rgba(34, 197, 94, 0.14);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+.status-bayar-badge.pending {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.status-bayar-badge.overdue {
+  background: rgba(239, 68, 68, 0.14);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.pembukuan-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  padding: 3px 8px;
+  border-radius: 5px;
+}
+
+.btn-bayar-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, #9333ea, #7c3aed);
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(147, 51, 234, 0.3);
+}
+.btn-bayar-now:hover {
+  background: linear-gradient(135deg, #a855f7, #9333ea);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(147, 51, 234, 0.45);
+}
+
+.btn-icon-soft {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-icon-soft:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.btn-icon-soft.text-danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.sync-pembukuan-box {
+  background: rgba(147, 51, 234, 0.08);
+  border: 1px solid rgba(147, 51, 234, 0.25);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+/* ── Direct Payment Styles (Proyek Langsung) ── */
+.badge-bayar-lunas {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.badge-bayar-sebagian {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+.badge-bayar-belum {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.badge-lunas-glow {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+.badge-sebagian-glow {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+.badge-pending-glow {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.card-direct-payment {
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+  border-radius: 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.direct-pay-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.direct-pay-icon.icon-lunas {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+.direct-pay-icon.icon-pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.btn-pay-direct {
+  background: linear-gradient(135deg, #16a34a, #15803d);
+  border: none;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  box-shadow: 0 3px 10px rgba(22, 163, 74, 0.35);
+}
+.btn-pay-direct:hover {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 15px rgba(22, 163, 74, 0.5);
+}
+
+.dp-pay-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+.dp-pay-stat {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border-color);
+  padding: 14px 16px;
+  border-radius: 10px;
+}
+.dp-pay-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.dp-pay-stat-val {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.dp-pay-stat-val.val-total {
+  color: var(--accent-orange);
+  font-family: monospace;
+}
+.dp-pay-stat-val.val-paid {
+  color: #4ade80;
+  font-family: monospace;
+}
+.dp-pay-stat-val.val-remaining {
+  color: #f87171;
+  font-family: monospace;
+}
+.dp-pay-stat-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.pay-prog-track {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.pay-prog-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #22c55e);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.pay-history-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.pay-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.pay-history-table th {
+  text-align: left;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border-color);
+}
+.pay-history-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+.pay-history-table tr:last-child td {
+  border-bottom: none;
+}
+
+.badge-metode {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.badge-tx-linked {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  padding: 3px 8px;
+  border-radius: 5px;
+  text-decoration: none;
+  transition: all 0.15s;
+}
+.badge-tx-linked:hover {
+  background: rgba(34, 197, 94, 0.2);
+  color: #fff;
+}
+
+.pay-history-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+}
+.btn-link-action {
+  background: none;
+  border: none;
+  color: #4ade80;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  font-size: 13px;
+}
+.btn-link-action:hover {
+  color: #22c55e;
+}
+
+.pay-modal-banner {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), rgba(16, 185, 129, 0.05));
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.pembukuan-checkbox-box {
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-top: 14px;
+}
+.btn-text-quick {
+  background: none;
+  border: none;
+  color: #4ade80;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.btn-text-quick:hover {
+  color: #22c55e;
 }
 </style>

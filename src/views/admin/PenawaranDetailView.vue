@@ -7,10 +7,11 @@ import { leadsApi, partsApi, penawaransApi } from '@/services/api'
 import type { LeadResponse, PartResponse } from '@/services/api'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import * as XLSX from 'xlsx'
 import {
   ChevronRight, Plus, CheckCircle2, FileText, Trash2, Save,
   AlertTriangle, Calendar, User, FileDigit, Box, Download,
-  ChevronDown, Pencil,
+  ChevronDown, Pencil, Upload, FileSpreadsheet, X,
   Clock, Building2, MapPin, Send
 } from '@lucide/vue'
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
@@ -66,6 +67,32 @@ const loadingMaster = ref(false)
 const showAddItemModal = ref(false)
 const showPdfSettings = ref(false)
 const pdfSettings = ref({ ...defaultPdfSettings })
+
+// ─── Import Excel State ────────────────────────────────────────────────────
+const showImportModal = ref(false)
+const importDragging = ref(false)
+const importLoading = ref(false)
+const importFileName = ref('')
+const importError = ref('')
+
+interface ImportRow {
+  nama_item: string
+  deskripsi: string
+  qty: number
+  harga_modal: number
+  markup_mode: 'persentase' | 'gpm' | 'manual' | 'custom'
+  markup_value: number
+  harga_satuan: number
+  pajak_type: 'tanpa_pajak' | 'dengan_pajak' | 'termasuk_pajak'
+  pajak_persen: number
+  jenis_item: 'barang' | 'jasa'
+  matched_part_id: number | null
+  matched_part_sku: string
+  _status: 'ok' | 'warn' | 'error'
+  _msg: string
+}
+
+const importRows = ref<ImportRow[]>([])
 
 const leads = ref<LeadResponse[]>([])
 const parts = ref<PartResponse[]>([])
@@ -858,6 +885,239 @@ function onPartBlur() {
   }, 150)
 }
 
+// ─── Import Excel Logic ────────────────────────────────────────────────────
+function openImportModal() {
+  importRows.value = []
+  importFileName.value = ''
+  importError.value = ''
+  importDragging.value = false
+  showImportModal.value = true
+}
+
+function closeImportModal() {
+  showImportModal.value = false
+}
+
+function downloadExcelTemplate() {
+  const headers = [
+    'nama_item', 'deskripsi', 'jenis_item', 'qty',
+    'harga_modal', 'markup_mode', 'markup_value',
+    'pajak_type', 'pajak_persen'
+  ]
+  const example = [
+    [
+      'Filter Oli Toyota', 'Ukuran 90915-YZZD2', 'barang', 2,
+      50000, 'gpm', 30,
+      'tanpa_pajak', 11
+    ],
+    [
+      'Oli Mesin 5W-30', 'Per liter', 'barang', 4,
+      75000, 'persentase', 20,
+      'dengan_pajak', 11
+    ],
+    [
+      'Jasa Tune-Up', 'Termasuk check-up menyeluruh', 'jasa', 1,
+      0, 'custom', 0,
+      'tanpa_pajak', 11
+    ]
+  ]
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...example])
+  // Set column widths
+  ws['!cols'] = [
+    { wch: 30 }, { wch: 35 }, { wch: 12 }, { wch: 6 },
+    { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 18 }, { wch: 12 }
+  ]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Items')
+  XLSX.writeFile(wb, 'template_import_item_penawaran.xlsx')
+}
+
+function onImportDrop(e: DragEvent) {
+  importDragging.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file) processImportFile(file)
+}
+
+function onImportFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) processImportFile(file)
+  input.value = ''
+}
+
+function parseMarkupMode(raw: string): 'persentase' | 'gpm' | 'manual' | 'custom' {
+  const v = String(raw || '').toLowerCase().trim()
+  if (v === 'gpm') return 'gpm'
+  if (v === 'manual') return 'manual'
+  if (v === 'custom') return 'custom'
+  return 'persentase'
+}
+
+function parsePajakType(raw: string): 'tanpa_pajak' | 'dengan_pajak' | 'termasuk_pajak' {
+  const v = String(raw || '').toLowerCase().trim()
+  if (v === 'dengan_pajak' || v === 'dengan pajak' || v === '2') return 'dengan_pajak'
+  if (v === 'termasuk_pajak' || v === 'termasuk pajak' || v === '3') return 'termasuk_pajak'
+  return 'tanpa_pajak'
+}
+
+function calcHargaSatuan(harga_modal: number, markup_mode: string, markup_value: number): number {
+  if (markup_mode === 'custom') return markup_value
+  if (markup_mode === 'manual') return harga_modal + markup_value
+  if (markup_mode === 'gpm') {
+    const gpm = Math.min(99.99, Math.max(0, markup_value))
+    if (gpm <= 0) return harga_modal
+    return Math.round(harga_modal / (1 - gpm / 100))
+  }
+  // persentase
+  return Math.round(harga_modal * (1 + markup_value / 100))
+}
+
+function processImportFile(file: File) {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  if (!['xlsx', 'xls', 'csv'].includes(ext || '')) {
+    importError.value = 'Format file tidak didukung. Gunakan .xlsx, .xls, atau .csv'
+    return
+  }
+  importFileName.value = file.name
+  importError.value = ''
+  importLoading.value = true
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    try {
+      const data = new Uint8Array(e.target!.result as ArrayBuffer)
+      const workbook = XLSX.read(data, { type: 'array' })
+      const sheetName = workbook.SheetNames[0]
+      const sheet = workbook.Sheets[sheetName]
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' })
+
+      if (rows.length === 0) {
+        importError.value = 'File kosong atau tidak ada data selain header.'
+        importLoading.value = false
+        return
+      }
+
+      const parsed: ImportRow[] = rows.map((row, idx) => {
+        const nama = String(row['nama_item'] || row['Nama Item'] || row['nama'] || '').trim()
+        const deskripsi = String(row['deskripsi'] || row['Deskripsi'] || '').trim()
+        const jenisRaw = String(row['jenis_item'] || row['Jenis'] || 'barang').toLowerCase().trim()
+        const jenis_item: 'barang' | 'jasa' = jenisRaw === 'jasa' ? 'jasa' : 'barang'
+        const qty = Math.max(1, Number(row['qty'] || row['Qty'] || row['QTY'] || 1) || 1)
+        const harga_modal = jenis_item === 'jasa' ? 0 : Math.max(0, Number(row['harga_modal'] || row['Harga Modal'] || 0) || 0)
+        const markup_mode = parseMarkupMode(String(row['markup_mode'] || row['Markup Mode'] || 'persentase'))
+        const markup_value = Number(row['markup_value'] || row['Markup Value'] || 0) || 0
+        const pajak_type = parsePajakType(String(row['pajak_type'] || row['Pajak Type'] || 'tanpa_pajak'))
+        const pajak_persen = Number(row['pajak_persen'] || row['Pajak Persen'] || 11) || 11
+
+        let harga_satuan = 0
+        if (jenis_item === 'jasa' || markup_mode === 'custom') {
+          harga_satuan = Math.max(0, Number(row['harga_satuan'] || row['Harga Satuan'] || markup_value || 0) || 0)
+        } else {
+          harga_satuan = calcHargaSatuan(harga_modal, markup_mode, markup_value)
+        }
+
+        // Try to match against master parts
+        let matched_part_id: number | null = null
+        let matched_part_sku = ''
+        if (jenis_item === 'barang' && nama) {
+          const partMatch = parts.value.find(p =>
+            p.nama.toLowerCase() === nama.toLowerCase() ||
+            (p.sku && p.sku.toLowerCase() === nama.toLowerCase())
+          )
+          if (partMatch) {
+            matched_part_id = partMatch.id
+            matched_part_sku = partMatch.sku
+            // Use supplier price as harga_modal if not provided
+            if (harga_modal === 0) {
+              const primary = partMatch.suppliers?.find(s => s.isPrimary)
+              const supplierHarga = Number(primary?.harga || partMatch.suppliers?.[0]?.harga || 0)
+              if (supplierHarga > 0 && harga_satuan === 0) {
+                harga_satuan = calcHargaSatuan(supplierHarga, markup_mode, markup_value)
+              }
+            }
+          }
+        }
+
+        let _status: 'ok' | 'warn' | 'error' = 'ok'
+        let _msg = ''
+
+        if (!nama) {
+          _status = 'error'
+          _msg = `Baris ${idx + 2}: nama_item kosong`
+        } else if (harga_satuan === 0 && jenis_item === 'barang') {
+          _status = 'warn'
+          _msg = 'Harga satuan 0, periksa kembali'
+        }
+
+        return {
+          nama_item: nama || `Item ${idx + 1}`,
+          deskripsi,
+          qty,
+          harga_modal,
+          markup_mode,
+          markup_value,
+          harga_satuan,
+          pajak_type,
+          pajak_persen,
+          jenis_item,
+          matched_part_id,
+          matched_part_sku,
+          _status,
+          _msg
+        }
+      })
+
+      importRows.value = parsed
+    } catch (err) {
+      importError.value = 'Gagal membaca file. Pastikan format file benar.'
+    } finally {
+      importLoading.value = false
+    }
+  }
+  reader.readAsArrayBuffer(file)
+}
+
+function removeImportRow(idx: number) {
+  importRows.value.splice(idx, 1)
+}
+
+function confirmImport() {
+  if (!store.selectedData) return
+  if (!store.selectedData.items) store.selectedData.items = []
+
+  const validRows = importRows.value.filter(r => r._status !== 'error')
+  if (validRows.length === 0) {
+    toast.error('Tidak ada baris yang valid untuk diimport')
+    return
+  }
+
+  validRows.forEach(row => {
+    const pct = (Number(row.pajak_persen) || 11) / 100
+    let baseHargaSatuan = Number(row.harga_satuan) || 0
+    if (row.pajak_type === 'termasuk_pajak') {
+      baseHargaSatuan = baseHargaSatuan / (1 + pct)
+    }
+
+    store.selectedData!.items.push({
+      id: 0,
+      part_id: row.jenis_item === 'barang' ? row.matched_part_id : null,
+      jenis_item: row.jenis_item,
+      pajak_type: row.pajak_type,
+      pajak_persen: row.pajak_persen,
+      nama_item: row.nama_item,
+      deskripsi: row.deskripsi,
+      qty: row.qty,
+      harga_satuan: baseHargaSatuan,
+      total_harga: row.qty * baseHargaSatuan
+    })
+  })
+
+  recalculateTotal('items')
+  toast.success(`${validRows.length} item berhasil diimport`)
+  closeImportModal()
+}
+
 function recalculateTotal(source?: string) {
   if (!store.selectedData) return
   let sub = 0
@@ -1092,9 +1352,14 @@ const itemTaxPreview = computed(() => {
           <div class="items-card">
             <div class="items-card-header">
               <h3><Box :size="16" /> Rincian Item</h3>
-              <button v-if="isEditMode" class="btn-secondary" @click="openAddItemModal">
-                <Plus :size="14" /> Tambah Item
-              </button>
+              <div v-if="isEditMode" class="items-action-group">
+                <button class="btn-import-excel" @click="openImportModal">
+                  <FileSpreadsheet :size="14" /> Import Excel
+                </button>
+                <button class="btn-secondary" @click="openAddItemModal">
+                  <Plus :size="14" /> Tambah Item
+                </button>
+              </div>
             </div>
             <div class="items-table-container">
               <table class="items-table">
@@ -1629,6 +1894,190 @@ const itemTaxPreview = computed(() => {
               <Plus :size="14" v-if="editingItemIndex === null" />
               <Pencil :size="14" v-else />
               {{ editingItemIndex !== null ? 'Simpan Perubahan' : 'Tambahkan ke Daftar' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Import Excel Modal ── -->
+      <div v-if="showImportModal" class="item-modal-overlay" @click.self="closeImportModal">
+        <div class="item-modal-card import-modal-card">
+          <div class="item-modal-head">
+            <h4><FileSpreadsheet :size="14" /> Import Item dari Excel</h4>
+            <button class="btn-ghost" @click="closeImportModal">Tutup</button>
+          </div>
+          <div class="item-modal-body import-modal-body">
+
+            <!-- Step 1: Download template & Upload -->
+            <div v-if="importRows.length === 0" class="import-upload-section">
+              <div class="import-guide">
+                <div class="import-guide-title">📋 Panduan Import</div>
+                <ul class="import-guide-list">
+                  <li>Download template Excel, isi data sesuai kolom yang tersedia</li>
+                  <li>Kolom <code>markup_mode</code>: <code>persentase</code>, <code>gpm</code>, <code>manual</code>, atau <code>custom</code></li>
+                  <li>Kolom <code>jenis_item</code>: <code>barang</code> atau <code>jasa</code></li>
+                  <li>Jika nama item cocok dengan Master Part, akan ter-link otomatis</li>
+                  <li>Format file: <strong>.xlsx</strong>, <strong>.xls</strong>, atau <strong>.csv</strong></li>
+                </ul>
+                <button class="btn-download-tpl" @click="downloadExcelTemplate">
+                  <Download :size="14" /> Download Template Excel
+                </button>
+              </div>
+
+              <div
+                class="import-dropzone"
+                :class="{ dragging: importDragging, loading: importLoading }"
+                @dragover.prevent="importDragging = true"
+                @dragleave.prevent="importDragging = false"
+                @drop.prevent="onImportDrop"
+              >
+                <label class="import-dropzone-label" for="excel-file-input">
+                  <div class="import-dropzone-icon">
+                    <Upload :size="32" />
+                  </div>
+                  <div v-if="importLoading" class="import-dropzone-text">
+                    <span class="import-loading-text">Memproses file...</span>
+                  </div>
+                  <div v-else class="import-dropzone-text">
+                    <span class="import-drop-main">Drag & drop file Excel di sini</span>
+                    <span class="import-drop-sub">atau klik untuk memilih file</span>
+                    <span class="import-drop-formats">.xlsx &nbsp;·&nbsp; .xls &nbsp;·&nbsp; .csv</span>
+                  </div>
+                </label>
+                <input
+                  id="excel-file-input"
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  style="display:none"
+                  @change="onImportFileChange"
+                />
+              </div>
+
+              <div v-if="importError" class="import-error-msg">
+                <AlertTriangle :size="14" /> {{ importError }}
+              </div>
+            </div>
+
+            <!-- Step 2: Preview parsed rows -->
+            <div v-else class="import-preview-section">
+              <div class="import-preview-header">
+                <div class="import-preview-info">
+                  <FileSpreadsheet :size="14" />
+                  <span><strong>{{ importFileName }}</strong> — {{ importRows.length }} baris ditemukan</span>
+                  <span
+                    class="import-badge"
+                    :class="importRows.some(r => r._status === 'error') ? 'badge-error' : importRows.some(r => r._status === 'warn') ? 'badge-warn' : 'badge-ok'"
+                  >
+                    {{ importRows.filter(r => r._status === 'error').length }} error,
+                    {{ importRows.filter(r => r._status === 'warn').length }} peringatan
+                  </span>
+                </div>
+                <button class="btn-ghost btn-xs" @click="importRows = []; importFileName = ''; importError = ''">
+                  <X :size="12" /> Ganti File
+                </button>
+              </div>
+
+              <div class="import-table-wrap">
+                <table class="import-preview-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Status</th>
+                      <th>Nama Item</th>
+                      <th>Jenis</th>
+                      <th>Qty</th>
+                      <th>Harga Modal</th>
+                      <th>Markup</th>
+                      <th>Harga Satuan</th>
+                      <th>Pajak</th>
+                      <th>Part Match</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(row, idx) in importRows"
+                      :key="idx"
+                      :class="'row-' + row._status"
+                    >
+                      <td class="text-center">{{ idx + 1 }}</td>
+                      <td class="text-center">
+                        <span v-if="row._status === 'ok'" class="status-dot ok" title="OK">✓</span>
+                        <span v-else-if="row._status === 'warn'" class="status-dot warn" :title="row._msg">⚠</span>
+                        <span v-else class="status-dot error" :title="row._msg">✗</span>
+                      </td>
+                      <td>
+                        <input v-model="row.nama_item" class="import-cell-input" />
+                        <small v-if="row.deskripsi" class="import-cell-sub">{{ row.deskripsi }}</small>
+                      </td>
+                      <td>
+                        <span class="item-type-badge" :class="row.jenis_item === 'jasa' ? 'badge-jasa' : 'badge-barang'">
+                          {{ row.jenis_item }}
+                        </span>
+                      </td>
+                      <td class="text-center">
+                        <input v-model.number="row.qty" type="number" min="1" class="import-cell-input import-cell-num" />
+                      </td>
+                      <td class="text-right">
+                        <span v-if="row.jenis_item === 'barang'">{{ formatCurrency(row.harga_modal) }}</span>
+                        <span v-else class="text-muted">-</span>
+                      </td>
+                      <td class="text-center">
+                        <span class="markup-chip" :class="'chip-' + row.markup_mode">
+                          {{ row.markup_mode === 'persentase' ? row.markup_value + '%' :
+                             row.markup_mode === 'gpm' ? 'GPM ' + row.markup_value + '%' :
+                             row.markup_mode === 'manual' ? 'Rp ' + row.markup_value.toLocaleString('id-ID') :
+                             'Custom' }}
+                        </span>
+                      </td>
+                      <td class="text-right">
+                        <input v-model.number="row.harga_satuan" type="number" min="0" class="import-cell-input import-cell-num" />
+                      </td>
+                      <td class="text-center">
+                        <span class="pajak-chip" :class="'pajak-' + row.pajak_type">
+                          {{ row.pajak_type === 'tanpa_pajak' ? '-' : row.pajak_persen + '%' }}
+                        </span>
+                      </td>
+                      <td>
+                        <span v-if="row.matched_part_id" class="part-match-chip">
+                          {{ row.matched_part_sku || 'Matched' }}
+                        </span>
+                        <span v-else class="text-muted">-</span>
+                      </td>
+                      <td>
+                        <button class="btn-icon danger" @click="removeImportRow(idx)" title="Hapus baris ini">
+                          <X :size="12" />
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Ringkasan total import -->
+              <div class="import-summary">
+                <div class="import-summary-item">
+                  <span>Total Item</span>
+                  <strong>{{ importRows.filter(r => r._status !== 'error').length }} item valid</strong>
+                </div>
+                <div class="import-summary-item">
+                  <span>Estimasi Total</span>
+                  <strong>{{ formatCurrency(importRows.filter(r => r._status !== 'error').reduce((s, r) => s + r.qty * r.harga_satuan, 0)) }}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="item-modal-foot">
+            <button class="btn-ghost" @click="closeImportModal">Batal</button>
+            <button
+              v-if="importRows.length > 0"
+              class="btn-secondary"
+              @click="confirmImport"
+              :disabled="importRows.every(r => r._status === 'error')"
+            >
+              <Plus :size="14" />
+              Import {{ importRows.filter(r => r._status !== 'error').length }} Item ke Penawaran
             </button>
           </div>
         </div>
@@ -2254,5 +2703,384 @@ const itemTaxPreview = computed(() => {
   background: rgba(245, 158, 11, 0.12);
   border-color: var(--accent-orange);
   color: var(--accent-orange);
+}
+
+/* ── Import Excel Feature ── */
+.items-action-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn-import-excel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.08);
+  color: #34d399;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-import-excel:hover {
+  background: rgba(52, 211, 153, 0.16);
+  border-color: rgba(52, 211, 153, 0.6);
+}
+
+.btn-download-tpl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.1);
+  color: #34d399;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 12px;
+}
+.btn-download-tpl:hover {
+  background: rgba(52, 211, 153, 0.2);
+}
+
+.import-modal-card {
+  max-width: 1100px;
+  width: 96vw;
+}
+
+.import-modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  max-height: calc(90vh - 130px);
+}
+
+/* Upload Section */
+.import-upload-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.import-guide {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.import-guide-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.import-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.import-guide-list code {
+  background: rgba(255,255,255,0.07);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+  color: #a78bfa;
+  font-family: monospace;
+}
+
+.import-dropzone {
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  transition: all 0.25s;
+  cursor: pointer;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-dropzone.dragging {
+  border-color: #34d399;
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.import-dropzone.loading {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.04);
+  cursor: wait;
+}
+
+.import-dropzone-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  min-height: 140px;
+  cursor: pointer;
+  padding: 24px;
+}
+
+.import-dropzone-icon {
+  color: var(--text-muted);
+  transition: color 0.2s;
+}
+.import-dropzone.dragging .import-dropzone-icon { color: #34d399; }
+
+.import-dropzone-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.import-drop-main {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.import-drop-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.import-drop-formats {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.04);
+  padding: 2px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+}
+
+.import-loading-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f59e0b;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.import-error-msg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #f87171;
+  font-size: 13px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+/* Preview Section */
+.import-preview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.import-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.import-preview-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.import-badge {
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.import-badge.badge-ok { background: rgba(52,211,153,0.12); color: #34d399; }
+.import-badge.badge-warn { background: rgba(245,158,11,0.12); color: #f59e0b; }
+.import-badge.badge-error { background: rgba(239,68,68,0.12); color: #f87171; }
+
+.btn-xs {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.import-table-wrap {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+
+.import-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.import-preview-table th {
+  background: rgba(255,255,255,0.04);
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.import-preview-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  vertical-align: middle;
+  color: var(--text-secondary);
+}
+
+.import-preview-table tr.row-error td {
+  background: rgba(239,68,68,0.04);
+}
+
+.import-preview-table tr.row-warn td {
+  background: rgba(245,158,11,0.04);
+}
+
+.import-preview-table tr:last-child td { border-bottom: none; }
+
+.import-preview-table .text-center { text-align: center; }
+.import-preview-table .text-right { text-align: right; }
+.import-preview-table .text-muted { color: var(--text-muted); }
+
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+.status-dot.ok { background: rgba(52,211,153,0.15); color: #34d399; }
+.status-dot.warn { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.status-dot.error { background: rgba(239,68,68,0.15); color: #f87171; }
+
+.import-cell-input {
+  width: 100%;
+  min-width: 80px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  padding: 3px 6px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.import-cell-input:focus {
+  border-color: var(--accent-orange);
+  background: rgba(255,255,255,0.07);
+}
+.import-cell-num {
+  max-width: 90px;
+  text-align: right;
+}
+.import-cell-sub {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.markup-chip {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.chip-persentase { background: rgba(96,165,250,0.12); color: #60a5fa; }
+.chip-gpm { background: rgba(167,139,250,0.12); color: #a78bfa; }
+.chip-manual { background: rgba(251,146,60,0.12); color: #fb923c; }
+.chip-custom { background: rgba(52,211,153,0.12); color: #34d399; }
+
+.pajak-chip {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.pajak-tanpa_pajak { background: rgba(107,114,128,0.1); color: #9ca3af; }
+.pajak-dengan_pajak { background: rgba(59,130,246,0.12); color: #60a5fa; }
+.pajak-termasuk_pajak { background: rgba(167,139,250,0.12); color: #a78bfa; }
+
+.part-match-chip {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(52,211,153,0.1);
+  color: #34d399;
+  white-space: nowrap;
+}
+
+.import-summary {
+  display: flex;
+  justify-content: flex-end;
+  gap: 20px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px 18px;
+}
+
+.import-summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.import-summary-item span {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.import-summary-item strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 </style>

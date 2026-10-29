@@ -1,28 +1,34 @@
 <script setup lang="ts">
-interface Project {
-  id: string
-  name: string
-  client: string
-  value: string
-  status: 'Berjalan' | 'Selesai' | 'Penawaran' | 'Pending' | 'QC'
-  progress: number
-}
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { proyeksApi, type ProyekResponse } from '@/services/api'
 
-const projects: Project[] = [
-  { id: 'P#S-2024-031', name: 'CCTV Warehouse Surabaya',    client: 'PT Logistics Indo',  value: 'Rp85.000.000', status: 'Berjalan',  progress: 65 },
-  { id: 'P#S-2024-032', name: 'Access Control Office CBD',  client: 'CV Maju Bersama',    value: 'Rp45.000.000', status: 'QC',        progress: 90 },
-  { id: 'P#S-2024-033', name: 'Instalasi CCTV Bandara',    client: 'PT Angkasa Pura',     value: 'Rp120.000.000',status: 'Berjalan',  progress: 40 },
-  { id: 'P#S-2024-034', name: 'Security System Hotel Bali', client: 'Bali Resort Group',  value: 'Rp78.000.000', status: 'Penawaran', progress: 0  },
-  { id: 'P#S-2024-035', name: 'CCTV Pabrik Bekasi',        client: 'PT Manufaktur Jaya',  value: 'Rp55.000.000', status: 'Selesai',   progress: 100},
-]
+const router = useRouter()
+const projects = ref<ProyekResponse[]>([])
+const total = ref(0)
+const loading = ref(true)
+
+onMounted(async () => {
+  try {
+    const res = await proyeksApi.list({ page: 1 })
+    projects.value = res.data
+    total.value = res.meta.total
+  } catch {
+    // silent
+  } finally {
+    loading.value = false
+  }
+})
 
 const badgeClass = (status: string) => {
   const map: Record<string, string> = {
-    Berjalan: 'badge badge-berjalan',
-    Selesai:  'badge badge-selesai',
-    Penawaran:'badge badge-penawaran',
-    Pending:  'badge badge-pending',
-    QC:       'badge badge-qc',
+    Berjalan:        'badge badge-berjalan',
+    Selesai:         'badge badge-selesai',
+    Penawaran:       'badge badge-penawaran',
+    'Belum Dimulai': 'badge badge-pending',
+    QC:              'badge badge-qc',
+    'Serah Terima':  'badge badge-qc',
+    Hold:            'badge badge-pending',
   }
   return map[status] ?? 'badge'
 }
@@ -38,13 +44,29 @@ const progressColor = (p: number) => {
   <div class="table-card">
     <div class="table-header">
       <h3>Proyek Terkini</h3>
-      <span class="table-header-sub">5 dari 8 aktif</span>
+      <span class="table-header-sub">
+        {{ loading ? '…' : `${projects.length} dari ${total} proyek` }}
+      </span>
     </div>
 
-    <table class="data-table">
+    <div
+      v-if="loading"
+      style="padding:32px;text-align:center;color:#8892a4;font-size:13px;"
+    >
+      Memuat data proyek…
+    </div>
+
+    <div
+      v-else-if="!projects.length"
+      style="padding:32px;text-align:center;color:#8892a4;font-size:13px;"
+    >
+      Belum ada proyek
+    </div>
+
+    <table v-else class="data-table">
       <thead>
         <tr>
-          <th>ID Proyek</th>
+          <th>Kode</th>
           <th>Nama Proyek</th>
           <th>Client</th>
           <th>Nilai</th>
@@ -53,11 +75,16 @@ const progressColor = (p: number) => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="p in projects" :key="p.id">
-          <td><span class="project-id">{{ p.id }}</span></td>
-          <td><span class="project-name">{{ p.name }}</span></td>
-          <td><span class="project-client">{{ p.client }}</span></td>
-          <td><span class="project-value">{{ p.value }}</span></td>
+        <tr
+          v-for="p in projects"
+          :key="p.id"
+          style="cursor:pointer;"
+          @click="router.push(`/admin/proyek/${p.id}`)"
+        >
+          <td><span class="project-id">{{ p.kode }}</span></td>
+          <td><span class="project-name">{{ p.nama }}</span></td>
+          <td><span class="project-client">{{ p.client_nama || '—' }}</span></td>
+          <td><span class="project-value">{{ p.nilai_format }}</span></td>
           <td><span :class="badgeClass(p.status)">{{ p.status }}</span></td>
           <td>
             <div class="progress-wrap">

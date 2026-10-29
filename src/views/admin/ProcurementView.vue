@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { formatRp } from '@/utils/currency'
 import {
   ShoppingCart, Package, Clock, CheckCircle2, X,
   Plus, Search, ChevronDown, ChevronLeft, ChevronRight, AlertTriangle,
@@ -192,12 +193,8 @@ const statusBreakdown = computed(() => {
   }))
 })
 
-const fmtRp = (n: number) => {
-  if (n >= 1_000_000_000) return 'Rp' + (n / 1_000_000_000).toFixed(1) + 'M'
-  if (n >= 1_000_000) return 'Rp' + (n / 1_000_000).toFixed(1) + ' Jt'
-  return 'Rp' + n.toLocaleString('id-ID')
-}
-const fmtRpFull = (n: number) => 'Rp' + n.toLocaleString('id-ID')
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
+const fmtRpFull = (n: number | string | null | undefined) => formatRp(n)
 
 // ── Status advance ──
 const showConfirmModal = ref(false)

@@ -5,6 +5,7 @@ import AdminLayout from '@/layouts/AdminLayout.vue'
 import { useSurveiStore } from '@/stores/survei'
 import { leadsApi, clientsApi } from '@/services/api'
 import type { LeadResponse, SurveiResponse, ClientResponse } from '@/services/api'
+import { formatRupiah as formatRpUtil } from '@/utils/currency'
 import {
   Search, Plus, CheckCircle2, ChevronDown, MapPin, Calendar, User,
   X, Trash2, ClipboardList, RefreshCw, AlertCircle, Building2
@@ -70,14 +71,7 @@ watch(totalPages, (newTotal) => {
 })
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
-const formatRupiah = (val: number | string | null | undefined) => {
-  const n = Number(val)
-  if (val === null || val === undefined || val === '' || Number.isNaN(n)) return '—'
-  if (n === 0) return 'Rp0'
-  if (n >= 1_000_000_000) return 'Rp' + (n / 1_000_000_000).toFixed(1) + 'M'
-  if (n >= 1_000_000) return 'Rp' + (n / 1_000_000).toFixed(0) + ' Jt'
-  return 'Rp' + n.toLocaleString('id-ID')
-}
+const formatRupiah = (val: number | string | null | undefined) => formatRpUtil(val, { fallback: '—' })
 
 const formatDate = (dateStr: string) => {
   return new Date(dateStr).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })

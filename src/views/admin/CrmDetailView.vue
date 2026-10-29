@@ -11,6 +11,7 @@ import {
 } from '@lucide/vue'
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
 import { getWaLink } from '@/utils/whatsapp'
+import { formatRp, formatRupiah } from '@/utils/currency'
 import {
   leadsApi,
   leadActivitiesApi,
@@ -136,9 +137,8 @@ onMounted(() => {
 })
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmtRp = (n: number | null) => {
-  if (!n) return '—'
-  return n.toLocaleString('id-ID') // Removed Rp prefix because currency is shown in UI label
+const fmtRp = (n: number | string | null | undefined) => {
+  return formatRupiah(n, { withPrefix: false, fallback: '—' })
 }
 
 const getIcon = (name: string) => {
@@ -728,10 +728,10 @@ const timeline = computed(() => {
                   <div class="dsb-cicilan-box">
                     <span style="font-size: 11px; color: #d8b4fe;">Estimasi Cicilan Sewa:</span>
                     <div style="font-size: 14px; font-weight: 700; color: #4ade80; font-family: monospace; margin: 2px 0;">
-                      Rp {{ (lead.nominal_per_bulan || Math.round((lead.estimasi || 0) / (lead.sewa_durasi_bulan || 12))).toLocaleString('id-ID') }} / bulan
+                      {{ formatRp(lead.nominal_per_bulan || Math.round((lead.estimasi || 0) / (lead.sewa_durasi_bulan || 12))) }} / bulan
                     </div>
                     <span style="font-size: 10.5px; color: var(--text-muted);">
-                      {{ lead.sewa_durasi_bulan || 12 }}x bayar dari total {{ fmtRp(lead.estimasi) }}
+                      {{ lead.sewa_durasi_bulan || 12 }}x bayar dari total {{ formatRp(lead.estimasi) }}
                     </span>
                   </div>
                 </div>
@@ -795,7 +795,7 @@ const timeline = computed(() => {
                   <div v-if="draft.estimasi && draft.sewa_durasi_bulan > 0" class="sewa-sim-banner" style="margin-top: 8px; padding: 6px 10px;">
                     <span style="font-size: 11px; color: #d8b4fe;">Simulasi:</span>
                     <strong style="color: #4ade80; font-family: monospace; font-size: 12.5px;">
-                      Rp {{ Math.round(draft.estimasi / draft.sewa_durasi_bulan).toLocaleString('id-ID') }}/bln
+                      {{ formatRp(Math.round(draft.estimasi / draft.sewa_durasi_bulan)) }}/bln
                     </strong>
                   </div>
                 </div>
@@ -866,7 +866,7 @@ const timeline = computed(() => {
                     <span><Calendar :size="11" style="display:inline; margin-right:4px;" />{{ p.tanggal || '-' }}</span>
                     <span>Berlaku s.d. {{ p.valid_until || '-' }}</span>
                   </div>
-                  <div class="penawaran-total">Total: IDR {{ fmtRp(p.total_harga) }}</div>
+                  <div class="penawaran-total">Total: {{ formatRp(p.total_harga) }}</div>
                 </div>
               </div>
             </div>
@@ -1169,7 +1169,7 @@ const timeline = computed(() => {
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span style="font-size: 12px; color: var(--text-muted);">Estimasi Nilai Proyek:</span>
                 <span style="font-size: 13px; font-weight: 800; color: var(--accent-orange);">
-                  IDR {{ fmtRp(lead?.estimasi ?? 0) }}
+                  {{ formatRp(lead?.estimasi ?? 0) }}
                 </span>
               </div>
             </div>

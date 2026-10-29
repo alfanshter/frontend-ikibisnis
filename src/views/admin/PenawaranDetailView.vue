@@ -17,12 +17,13 @@ import {
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
 import { getWaLink } from '@/utils/whatsapp'
 import { useToast } from 'vue-toastification'
+import { formatRp } from '@/utils/currency'
 
 const route = useRoute()
 const router = useRouter()
 const penawaranId = Number(route.params.id)
 
-const formatCurrency = (n: number) => 'Rp ' + Math.round(n).toLocaleString('id-ID')
+const formatCurrency = (n: number | string | null | undefined) => formatRp(n)
 
 const store = usePenawaranStore()
 const toast = useToast()
@@ -1787,7 +1788,7 @@ const itemTaxPreview = computed(() => {
                   <label>Target GPM (%)</label>
                   <input type="number" v-model="itemForm.gpm_persen" class="fs-input" min="0" max="99.99" step="0.01" placeholder="Contoh: 30" />
                   <small class="hint-text gpm-hint" v-if="itemForm.harga_modal > 0">
-                    GPM {{ itemForm.gpm_persen }}% → Laba Rp {{ Math.round(itemForm.harga_satuan - itemForm.harga_modal).toLocaleString('id-ID') }}
+                    GPM {{ itemForm.gpm_persen }}% → Laba {{ formatRp(itemForm.harga_satuan - itemForm.harga_modal) }}
                     &nbsp;|&nbsp; Markup efektif {{ itemForm.harga_satuan > 0 ? ((itemForm.harga_satuan - itemForm.harga_modal) / itemForm.harga_modal * 100).toFixed(1) : '0' }}%
                   </small>
                 </div>
@@ -2026,7 +2027,7 @@ const itemTaxPreview = computed(() => {
                         <span class="markup-chip" :class="'chip-' + row.markup_mode">
                           {{ row.markup_mode === 'persentase' ? row.markup_value + '%' :
                              row.markup_mode === 'gpm' ? 'GPM ' + row.markup_value + '%' :
-                             row.markup_mode === 'manual' ? 'Rp ' + row.markup_value.toLocaleString('id-ID') :
+                             row.markup_mode === 'manual' ? formatRp(row.markup_value) :
                              'Custom' }}
                         </span>
                       </td>

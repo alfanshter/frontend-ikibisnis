@@ -15,6 +15,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { proyeksApi, transactionsApi, leadsApi } from '@/services/api'
 import type { ProyekStatsResponse, TransactionStatsResponse, LeadStatsResponse } from '@/services/api'
+import { formatRp } from '@/utils/currency'
 
 const auth = useAuthStore()
 
@@ -52,10 +53,7 @@ const currentYear = new Date().getFullYear()
 const pendapatanBulanIni = computed(() => {
   if (!txStats.value) return '—'
   const raw = txStats.value.current_period.total_masuk
-  if (raw >= 1_000_000_000) return `Rp ${(raw / 1_000_000_000).toFixed(1)}M`
-  if (raw >= 1_000_000) return `Rp ${(raw / 1_000_000).toFixed(0)}jt`
-  if (raw >= 1_000) return `Rp ${(raw / 1_000).toFixed(0)}rb`
-  return `Rp ${raw}`
+  return formatRp(raw)
 })
 
 const leadsBulanIni = computed(() => {

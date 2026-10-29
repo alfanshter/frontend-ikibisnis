@@ -8,6 +8,7 @@ import { leadsApi, penawaransApi, documentNumberingApi } from '../../services/ap
 import type { LeadResponse } from '../../services/api'
 import { Search, Plus, FileText, Trash2, X } from '@lucide/vue'
 import { useToast } from 'vue-toastification'
+import { formatRp } from '@/utils/currency'
 
 const AdminLayout = (AdminLayoutModule as unknown as { default: Component }).default
 
@@ -16,7 +17,7 @@ const route = useRoute()
 const store = usePenawaranStore()
 const toast = useToast()
 
-const formatCurrency = (n: number) => 'Rp ' + Math.round(n).toLocaleString('id-ID')
+const formatCurrency = (n: number | string | null | undefined) => formatRp(n)
 
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (error instanceof Error && error.message) return error.message

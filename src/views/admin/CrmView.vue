@@ -12,6 +12,7 @@ import {
   type LeadResponse, type LeadStatus, type LeadSumber, type LeadStatsResponse, type ClientResponse, type DocumentNumbering
 } from '@/services/api'
 import { getWaWebLink } from '@/utils/whatsapp'
+import { formatRp, formatRupiah } from '@/utils/currency'
 
 const router = useRouter()
 
@@ -170,12 +171,7 @@ watch(filterStatus, () => { currentPage.value = 1; fetchLeads(1) })
 watch(filterTipeKontrak, () => { currentPage.value = 1; fetchLeads(1) })
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
-const fmtRp = (n: number | null) => {
-  if (!n) return '—'
-  if (n >= 1_000_000_000) return 'Rp' + (n / 1_000_000_000).toFixed(1) + 'M'
-  if (n >= 1_000_000) return 'Rp' + (n / 1_000_000).toFixed(0) + ' Jt'
-  return 'Rp' + n.toLocaleString('id-ID')
-}
+const fmtRp = (n: number | string | null | undefined) => formatRupiah(n, { fallback: '—' })
 
 const waLink = (lead: LeadResponse) => {
   if (!lead.phone) return '#'
@@ -519,7 +515,7 @@ const sourceClass = (s: LeadSumber) => `source-${s.toLowerCase().replace(/\s+/g,
             <td class="estimasi-cell">
               <div>{{ fmtRp(lead.estimasi) }}</div>
               <div v-if="lead.tipe_kontrak === 'Sewa' && (lead.nominal_per_bulan || (lead.estimasi && lead.sewa_durasi_bulan))" style="font-size: 11px; color: #c084fc; font-weight: normal; margin-top: 2px;">
-                ≈ Rp {{ (lead.nominal_per_bulan || Math.round((lead.estimasi || 0) / (lead.sewa_durasi_bulan || 12))).toLocaleString('id-ID') }}/bln
+                ≈ {{ formatRp(lead.nominal_per_bulan || Math.round((lead.estimasi || 0) / (lead.sewa_durasi_bulan || 12))) }}/bln
               </div>
             </td>
 
@@ -660,10 +656,10 @@ const sourceClass = (s: LeadSumber) => `source-${s.toLowerCase().replace(/\s+/g,
               <div v-if="form.estimasi && form.estimasi > 0 && form.sewa_durasi_bulan > 0" class="sewa-sim-banner">
                 <span style="font-size: 12px; color: #d8b4fe;">Simulasi Cicilan Sewa:</span>
                 <strong style="color: #4ade80; font-family: monospace; font-size: 13.5px; margin: 0 6px;">
-                  Rp {{ Math.round(form.estimasi / form.sewa_durasi_bulan).toLocaleString('id-ID') }} / bulan
+                  {{ formatRp(Math.round(form.estimasi / form.sewa_durasi_bulan)) }} / bulan
                 </strong>
                 <span style="font-size: 11px; color: var(--text-muted);">
-                  ({{ form.sewa_durasi_bulan }}x bayar dari estimasi total Rp {{ Number(form.estimasi).toLocaleString('id-ID') }})
+                  ({{ form.sewa_durasi_bulan }}x bayar dari estimasi total {{ formatRp(form.estimasi) }})
                 </span>
               </div>
             </div>

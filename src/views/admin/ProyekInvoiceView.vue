@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { formatRp } from '@/utils/currency'
 import {
   ArrowLeft, Plus, Search, FileText, X, Trash2,
   CheckCircle2, Clock, AlertCircle, Building2, Calendar, DollarSign, RefreshCw,
@@ -73,7 +74,7 @@ const statJatuhTempo = computed(() => invoiceList.value.filter(i => i.status ===
 const subtotal         = (item: ProyekInvoiceItem) => item.qty * item.harga_satuan * (1 - item.diskon / 100)
 const totalSebelumPPN  = (its: ProyekInvoiceItem[]) => its.reduce((a, i) => a + subtotal(i), 0)
 const totalAkhir       = (its: ProyekInvoiceItem[], ppn: number) => { const sub = totalSebelumPPN(its); return sub + sub * ppn / 100 }
-const rp               = (val: number) => 'Rp ' + Math.round(val).toLocaleString('id-ID')
+const rp               = (val: number | string | null | undefined) => formatRp(val)
 const tipeLabel        = (inv: ProyekInvoiceResponse) => inv.tipe === 'Termin' ? `Termin ${inv.nomor_termin ?? ''}` : inv.tipe
 
 const formatDate = (d: string | null) => {

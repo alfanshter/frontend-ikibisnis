@@ -3,16 +3,11 @@ import { ref, computed, watch, onMounted } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import { TrendingUp, TrendingDown, DollarSign, Percent, ChevronDown, ChevronUp, RefreshCw, AlertCircle } from '@lucide/vue'
 import { reportsApi, type LabaRugiResponse } from '@/services/api'
+import { formatRp, formatRupiahShort } from '@/utils/currency'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmtRp = (n: number) => 'Rp' + Math.abs(n).toLocaleString('id-ID')
-const fmtRpShort = (n: number) => {
-  const abs = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1_000_000_000) return sign + 'Rp' + (abs / 1_000_000_000).toFixed(1) + 'M'
-  if (abs >= 1_000_000) return sign + 'Rp' + (abs / 1_000_000).toFixed(0) + ' Jt'
-  return sign + 'Rp' + abs.toLocaleString('id-ID')
-}
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
+const fmtRpShort = (n: number | string | null | undefined) => formatRupiahShort(n)
 const fmtPct = (v: number) => v.toFixed(1) + '%'
 
 // ─── Period picker ────────────────────────────────────────────────────────────
@@ -115,7 +110,7 @@ watch([selectedMonth, selectedYear], fetchData)
           </div>
           <div>
             <div class="lr-stat-label">Total Pendapatan</div>
-            <div class="lr-stat-val" style="color: #22c55e;">{{ fmtRpShort(totalPendapatan) }}</div>
+            <div class="lr-stat-val" style="color: #22c55e;">{{ fmtRp(totalPendapatan) }}</div>
           </div>
         </div>
         <div class="lr-stat-card">
@@ -124,7 +119,7 @@ watch([selectedMonth, selectedYear], fetchData)
           </div>
           <div>
             <div class="lr-stat-label">Total HPP + Beban</div>
-            <div class="lr-stat-val" style="color: #ef4444;">{{ fmtRpShort(totalHPP + totalBeban) }}</div>
+            <div class="lr-stat-val" style="color: #ef4444;">{{ fmtRp(totalHPP + totalBeban) }}</div>
           </div>
         </div>
         <div class="lr-stat-card">
@@ -134,7 +129,7 @@ watch([selectedMonth, selectedYear], fetchData)
           <div>
             <div class="lr-stat-label">Laba Bersih</div>
             <div class="lr-stat-val" :style="{ color: labaBersih >= 0 ? 'var(--accent-orange)' : '#ef4444' }">
-              {{ fmtRpShort(labaBersih) }}
+              {{ fmtRp(labaBersih) }}
             </div>
           </div>
         </div>
@@ -164,7 +159,7 @@ watch([selectedMonth, selectedYear], fetchData)
                   height: trendH(d.laba_jt) + 'px',
                   background: d.laba >= 0 ? 'linear-gradient(180deg,#f59e0b,#d97706)' : 'linear-gradient(180deg,#ef4444,#dc2626)'
                 }"
-                :title="fmtRpShort(d.laba)"
+                :title="fmtRp(d.laba)"
               />
             </div>
             <div class="lr-trend-label">{{ d.month }}</div>

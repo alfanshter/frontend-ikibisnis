@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { formatRp } from '@/utils/currency'
 import {
   ArrowLeft, Plus, X, Wallet, User, UserCheck,
   DollarSign, CheckCircle2, Clock, AlertCircle,
@@ -93,7 +94,7 @@ const totalSisa     = computed(() => totalFee.value - totalDibayar.value)
 const countLunas    = computed(() => feeList.value.filter(f => f.statusBayar === 'Lunas').length)
 const countPending  = computed(() => feeList.value.filter(f => f.statusBayar !== 'Lunas').length)
 
-const fmtRp = (n: number) => 'Rp' + Math.round(n).toLocaleString('id-ID')
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
 const pctDibayar = computed(() => totalFee.value > 0 ? ((totalDibayar.value / totalFee.value) * 100).toFixed(0) : '0')
 
 const getInitials = (name: string) => {

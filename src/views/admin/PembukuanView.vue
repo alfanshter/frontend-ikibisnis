@@ -4,6 +4,7 @@ import AdminLayout from '@/layouts/AdminLayout.vue'
 import { Plus, TrendingUp, TrendingDown, DollarSign, X, ChevronDown, Loader2, Pencil, Trash2 } from '@lucide/vue'
 import { useTransactionsStore } from '@/stores/transactions'
 import { leadsApi, type LeadResponse } from '@/services/api'
+import { formatRp } from '@/utils/currency'
 
 // ─── Store ─────────────────────────────────────────────────────────────────
 const store = useTransactionsStore()
@@ -70,10 +71,6 @@ watch(totalPages, (newTotal) => {
 const totalMasuk  = computed(() => store.stats?.current_period.total_masuk || 0)
 const totalKeluar = computed(() => store.stats?.current_period.total_keluar || 0)
 const saldoBersih = computed(() => store.stats?.current_period.saldo_bersih || 0)
-
-function formatRp(val: number) {
-  return 'Rp' + val.toLocaleString('id-ID')
-}
 
 // ─── Modal ─────────────────────────────────────────────────────────────────
 const showModal      = ref(false)
@@ -343,12 +340,12 @@ const executeDelete = async () => {
                   <div
                     class="bar bar-masuk"
                     :style="{ height: barHeight(d.masuk) + 'px' }"
-                    :title="`Masuk: ${d.masuk_jt}jt`"
+                    :title="`Masuk: ${formatRp(d.masuk)}`"
                   ></div>
                   <div
                     class="bar bar-keluar"
                     :style="{ height: barHeight(d.keluar) + 'px' }"
-                    :title="`Keluar: ${d.keluar_jt}jt`"
+                    :title="`Keluar: ${formatRp(d.keluar)}`"
                   ></div>
                 </div>
                 <div class="bar-label">{{ d.month }}</div>
@@ -575,6 +572,9 @@ const executeDelete = async () => {
               <div class="form-field">
                 <label class="form-label">Jumlah (Rp) *</label>
                 <input v-model="form.amount" type="number" class="form-input" placeholder="0" min="0" />
+                <div v-if="form.amount" style="font-size: 11.5px; color: #4ade80; margin-top: 4px; font-weight: 600;">
+                  Format: {{ formatRp(form.amount) }}
+                </div>
               </div>
               <div class="form-field">
                 <label class="form-label">Tanggal</label>

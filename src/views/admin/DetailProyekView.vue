@@ -17,6 +17,7 @@ import {
   type SewaJadwalItem, type SewaJadwalSummary, type ProyekPembayaranResponse
 } from '@/services/api'
 import { getWaWebLink } from '@/utils/whatsapp'
+import { formatRp } from '@/utils/currency'
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
 
 const route = useRoute()
@@ -507,10 +508,7 @@ const payPercent = computed(() => {
   return Math.min(100, Math.round((paid / nilai) * 100))
 })
 
-const formatRupiah = (val?: number | null) => {
-  if (!val && val !== 0) return 'Rp 0'
-  return 'Rp ' + Number(val).toLocaleString('id-ID')
-}
+const formatRupiah = (val?: number | string | null) => formatRp(val)
 
 const openDirectPayModal = () => {
   if (!detailProyek.value) return
@@ -1398,7 +1396,7 @@ const hapusDirectPayment = async (pembayaranId: number) => {
                 <label class="form-label">Biaya Perpanjangan (Rp) *</label>
                 <input v-model.number="formPerpanjang.nominal" type="number" min="0" step="100000" class="form-input" />
                 <span class="form-hint" v-if="formPerpanjang.nominal > 0 && formPerpanjang.durasi_bulan > 0">
-                  ≈ Rp {{ Math.round(formPerpanjang.nominal / formPerpanjang.durasi_bulan).toLocaleString('id-ID') }} / bulan
+                  ≈ {{ formatRp(Math.round(formPerpanjang.nominal / formPerpanjang.durasi_bulan)) }} / bulan
                 </span>
               </div>
               <div class="form-field">
@@ -1488,7 +1486,7 @@ const hapusDirectPayment = async (pembayaranId: number) => {
                   {{ detailProyek?.sewa_durasi_bulan || 12 }} Invoice Bulanan
                 </span>
                 <span style="font-size: 15px; font-weight: 700; color: #10b981; font-family: monospace;">
-                  {{ detailProyek?.nominal_per_bulan ? 'Rp ' + Number(detailProyek.nominal_per_bulan).toLocaleString('id-ID') + ' / bln' : '—' }}
+                  {{ detailProyek?.nominal_per_bulan ? formatRp(detailProyek.nominal_per_bulan) + ' / bln' : '—' }}
                 </span>
               </div>
               <div v-else style="display: flex; justify-content: space-between; align-items: center;">

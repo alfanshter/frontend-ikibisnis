@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { formatRp } from '@/utils/currency'
 import {
   ArrowLeft, Plus, X, Trash2, Edit3, Search, ChevronDown,
   Receipt, FileText, Image as ImageIcon, Paperclip,
@@ -88,7 +89,7 @@ const totalBiaya      = computed(() => biayaList.value.reduce((s, b) => s + b.no
 const totalBelumReimburse = computed(() => biayaList.value.filter(b => b.status === 'Belum Direimburse').reduce((s, b) => s + b.nominal, 0))
 const totalSudahReimburse = computed(() => biayaList.value.filter(b => b.status === 'Sudah Direimburse').reduce((s, b) => s + b.nominal, 0))
 
-const fmtRp = (n: number) => 'Rp' + Math.round(n).toLocaleString('id-ID')
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
 
 // ── Modal CRUD ──
 const showModal  = ref(false)

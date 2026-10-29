@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { formatRp } from '@/utils/currency'
 import {
   Plus, Search, FileText, ChevronDown, X, Trash2, Printer,
   CheckCircle2, Clock, AlertCircle, Building2, Calendar, DollarSign, Download, Send
@@ -229,7 +230,7 @@ const totalAkhir = (its: InvoiceItem[], ppn: number) => {
   return sub + (sub * ppn / 100)
 }
 
-const rp = (val: number) => 'Rp ' + Math.round(val).toLocaleString('id-ID')
+const rp = (val: number | string | null | undefined) => formatRp(val)
 
 // ─── Tipe Label ───────────────────────────────────────────────────────────────
 const tipeLabel = (inv: Invoice) => {

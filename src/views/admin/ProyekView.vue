@@ -8,6 +8,7 @@ import {
   type ProyekResponse, type StatusProyek, type ProyekPayload,
   type TipeKontrakProyek, type SkemaPembayaranSewa
 } from '@/services/api'
+import { formatRp } from '@/utils/currency'
 
 const router = useRouter()
 
@@ -306,10 +307,7 @@ const submitQuickBayar = async () => {
   }
 }
 
-const formatRupiah = (val?: number | null) => {
-  if (!val && val !== 0) return 'Rp 0'
-  return 'Rp ' + Number(val).toLocaleString('id-ID')
-}
+const formatRupiah = (val?: number | string | null) => formatRp(val)
 </script>
 
 
@@ -585,11 +583,11 @@ const formatRupiah = (val?: number | null) => {
               <!-- Real-time Simulation Box -->
               <div class="sewa-sim-banner">
                 <div v-if="form.skema_pembayaran === 'Bulanan'">
-                  💡 <strong>Simulasi Bulanan:</strong> Total Rp {{ Number(form.nilai || 0).toLocaleString('id-ID') }} ÷ {{ form.sewa_durasi_bulan }} bulan =
-                  <strong style="color: #a855f7;">Rp {{ (form.nominal_per_bulan || estimasiPerBulan).toLocaleString('id-ID') }} / bulan</strong>
+                  💡 <strong>Simulasi Bulanan:</strong> Total {{ formatRp(form.nilai || 0) }} ÷ {{ form.sewa_durasi_bulan }} bulan =
+                  <strong style="color: #a855f7;">{{ formatRp(form.nominal_per_bulan || estimasiPerBulan) }} / bulan</strong>
                 </div>
                 <div v-else>
-                  💡 <strong>Simulasi Sekaligus:</strong> Dibayarkan lunas <strong style="color: #a855f7;">Rp {{ Number(form.nilai || 0).toLocaleString('id-ID') }}</strong> di awal periode kontrak sewa.
+                  💡 <strong>Simulasi Sekaligus:</strong> Dibayarkan lunas <strong style="color: #a855f7;">{{ formatRp(form.nilai || 0) }}</strong> di awal periode kontrak sewa.
                 </div>
               </div>
             </div>

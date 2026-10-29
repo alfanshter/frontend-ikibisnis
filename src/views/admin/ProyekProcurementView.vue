@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { formatRp } from '@/utils/currency'
 import {
   ArrowLeft, Plus, ShoppingCart, Package, CheckCircle2,
   Clock, Truck, X, AlertTriangle, Search, ChevronDown,
@@ -114,7 +115,7 @@ const nilaiPending = computed(() => items.value.filter(i => i.status === 'Pendin
 const countPending = computed(() => items.value.filter(i => i.status === 'Pending').length)
 const countDiterima = computed(() => items.value.filter(i => i.status === 'Diterima').length)
 
-const fmtRp = (n: number) => 'Rp' + n.toLocaleString('id-ID')
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
 
 // ── Status config ──
 const statusCfg: Record<StatusProcurement, { color: string; bg: string; border: string; icon: any }> = {

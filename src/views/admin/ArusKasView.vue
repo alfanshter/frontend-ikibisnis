@@ -3,16 +3,11 @@ import { ref, computed, watch, onMounted } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import { TrendingUp, TrendingDown, DollarSign, Activity, ChevronDown, ChevronUp, ArrowUpRight, ArrowDownRight, RefreshCw, Plus, AlertCircle } from '@lucide/vue'
 import { reportsApi, type ArusKasResponse, type ArusKasSection } from '@/services/api'
+import { formatRp, formatRupiahShort } from '@/utils/currency'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmtRp = (n: number) => 'Rp' + Math.abs(n).toLocaleString('id-ID')
-const fmtRpShort = (n: number) => {
-  const abs = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1_000_000_000) return sign + 'Rp' + (abs / 1_000_000_000).toFixed(1) + 'M'
-  if (abs >= 1_000_000) return sign + 'Rp' + (abs / 1_000_000).toFixed(0) + ' Jt'
-  return sign + 'Rp' + abs.toLocaleString('id-ID')
-}
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
+const fmtRpShort = (n: number | string | null | undefined) => formatRupiahShort(n)
 
 // ─── Period picker ────────────────────────────────────────────────────────────
 const now = new Date()
@@ -121,7 +116,7 @@ watch([selectedMonth, selectedYear], fetchData)
           </div>
           <div>
             <div class="ak-stat-label">Total Kas Masuk</div>
-            <div class="ak-stat-val" style="color: #22c55e;">{{ fmtRpShort(totalMasuk) }}</div>
+            <div class="ak-stat-val" style="color: #22c55e;">{{ fmtRp(totalMasuk) }}</div>
           </div>
         </div>
         <div class="ak-stat-card">
@@ -130,7 +125,7 @@ watch([selectedMonth, selectedYear], fetchData)
           </div>
           <div>
             <div class="ak-stat-label">Total Kas Keluar</div>
-            <div class="ak-stat-val" style="color: #ef4444;">{{ fmtRpShort(totalKeluar) }}</div>
+            <div class="ak-stat-val" style="color: #ef4444;">{{ fmtRp(totalKeluar) }}</div>
           </div>
         </div>
         <div class="ak-stat-card">
@@ -140,7 +135,7 @@ watch([selectedMonth, selectedYear], fetchData)
           <div>
             <div class="ak-stat-label">Net Cash Flow</div>
             <div class="ak-stat-val" :style="{ color: netCashFlow >= 0 ? '#22c55e' : '#ef4444' }">
-              {{ netCashFlow >= 0 ? '+' : '' }}{{ fmtRpShort(netCashFlow) }}
+              {{ netCashFlow >= 0 ? '+' : '' }}{{ fmtRp(netCashFlow) }}
             </div>
           </div>
         </div>
@@ -150,8 +145,8 @@ watch([selectedMonth, selectedYear], fetchData)
           </div>
           <div>
             <div class="ak-stat-label">Saldo Akhir</div>
-            <div class="ak-stat-val" style="color: var(--accent-orange);">{{ fmtRpShort(saldoAkhir) }}</div>
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Awal: {{ fmtRpShort(saldoAwal) }}</div>
+            <div class="ak-stat-val" style="color: var(--accent-orange);">{{ fmtRp(saldoAkhir) }}</div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Awal: {{ fmtRp(saldoAwal) }}</div>
           </div>
         </div>
       </div>
@@ -172,7 +167,7 @@ watch([selectedMonth, selectedYear], fetchData)
                     background: d.net >= 0 ? 'linear-gradient(180deg,#22c55e,#16a34a)' : 'linear-gradient(180deg,#ef4444,#dc2626)',
                     opacity: 0.85,
                   }"
-                  :title="fmtRpShort(d.net)"
+                  :title="fmtRp(d.net)"
                 />
               </div>
               <div class="ak-chart-label">{{ d.month }}</div>

@@ -12,6 +12,7 @@ import {
   Legend,
 } from 'chart.js'
 import type { TransactionStatsResponse } from '@/services/api'
+import { formatRp } from '@/utils/currency'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend)
 
@@ -82,7 +83,14 @@ const chartOptions = computed(() => ({
       bodyColor: '#8892a4',
       padding: 10,
       callbacks: {
-        label: (ctx: any) => ` ${ctx.dataset.label}: Rp ${ctx.parsed.y}jt`,
+        label: (ctx: any) => {
+          const d = props.stats?.chart_data?.[ctx.dataIndex]
+          if (d) {
+            const rawVal = ctx.datasetIndex === 0 ? d.masuk : d.keluar
+            return ` ${ctx.dataset.label}: ${formatRp(rawVal)}`
+          }
+          return ` ${ctx.dataset.label}: ${formatRp((ctx.parsed.y || 0) * 1_000_000)}`
+        },
       },
     },
   },

@@ -5,6 +5,7 @@ import AdminLayout from '@/layouts/AdminLayout.vue'
 import { useSurveiStore } from '@/stores/survei'
 import { auditLogsApi } from '@/services/api'
 import type { SurveiResponse, AuditLogResponse } from '@/services/api'
+import { formatRupiah as formatRpUtil } from '@/utils/currency'
 import {
   ArrowLeft, CheckCircle2, AlertTriangle, FileText, Activity, Clock,
   User, Ban, Edit3, Save, GripVertical, Plus, Trash2, X, ClipboardList
@@ -199,11 +200,7 @@ function markAsBatal(survei: SurveiResponse) {
   )
 }
 
-const formatRupiah = (val: number | string) => {
-  const n = Number(val)
-  if (!n) return 'Rp -'
-  return 'Rp' + n.toLocaleString('id-ID')
-}
+const formatRupiah = (val: number | string | null | undefined) => formatRpUtil(val, { fallback: 'Rp -' })
 
 const formatDate = (dateStr: string) => {
   return new Date(dateStr).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })

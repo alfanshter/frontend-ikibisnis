@@ -3,20 +3,11 @@ import { ref, computed, watch, onMounted } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import { Building2, Wallet, BarChart3, ChevronDown, ChevronUp, RefreshCw, AlertCircle, Plus, Pencil, Trash2, X, Save } from '@lucide/vue'
 import { reportsApi, financialEntriesApi, type NeracaResponse, type FinancialEntryResponse } from '@/services/api'
+import { formatRp, formatRupiahShort } from '@/utils/currency'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmtRp = (n: number) => {
-  const abs = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  return sign + 'Rp' + abs.toLocaleString('id-ID')
-}
-const fmtRpShort = (n: number) => {
-  const abs = Math.abs(n)
-  const sign = n < 0 ? '-' : ''
-  if (abs >= 1_000_000_000) return sign + 'Rp' + (abs / 1_000_000_000).toFixed(2) + 'M'
-  if (abs >= 1_000_000) return sign + 'Rp' + (abs / 1_000_000).toFixed(0) + ' Jt'
-  return sign + 'Rp' + abs.toLocaleString('id-ID')
-}
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
+const fmtRpShort = (n: number | string | null | undefined) => formatRupiahShort(n)
 
 // ─── Date picker ──────────────────────────────────────────────────────────────
 const now = new Date()
@@ -206,7 +197,7 @@ function closeModal() {
           </div>
           <div>
             <div class="nr-stat-label">Total Aset</div>
-            <div class="nr-stat-val" style="color: #22c55e;">{{ fmtRpShort(totalAset) }}</div>
+            <div class="nr-stat-val" style="color: #22c55e;">{{ fmtRp(totalAset) }}</div>
           </div>
         </div>
         <div class="nr-stat-card">
@@ -215,7 +206,7 @@ function closeModal() {
           </div>
           <div>
             <div class="nr-stat-label">Total Liabilitas</div>
-            <div class="nr-stat-val" style="color: #ef4444;">{{ fmtRpShort(totalLiab) }}</div>
+            <div class="nr-stat-val" style="color: #ef4444;">{{ fmtRp(totalLiab) }}</div>
           </div>
         </div>
         <div class="nr-stat-card">
@@ -224,7 +215,7 @@ function closeModal() {
           </div>
           <div>
             <div class="nr-stat-label">Total Ekuitas</div>
-            <div class="nr-stat-val" style="color: var(--accent-orange);">{{ fmtRpShort(totalEkuitas) }}</div>
+            <div class="nr-stat-val" style="color: var(--accent-orange);">{{ fmtRp(totalEkuitas) }}</div>
           </div>
         </div>
         <div class="nr-stat-card" :class="{ 'nr-balanced': isBalanced }">

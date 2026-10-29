@@ -8,6 +8,7 @@ import {
   AlertTriangle, Star, FileUp, Download,
 } from '@lucide/vue'
 import { partsApi, type PartResponse, type PartSupplierResponse } from '@/services/api'
+import { formatRp as formatCurrencyRp } from '@/utils/currency'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Kategori = 'Elektrikal' | 'Kabel & Koneksi' | 'Hardware Keamanan' | 'Aksesoris' | 'Tools & Alat' | 'Lainnya'
@@ -118,9 +119,9 @@ const hargaTerendah = (p: PartResponse) => p.suppliers.length > 0 ? Math.min(...
 const supplierUtama = (p: PartResponse) => p.suppliers.find(s => s.isPrimary) ?? p.suppliers[0]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function formatRp(n: number) {
-  if (!n) return '-'
-  return 'Rp ' + n.toLocaleString('id-ID')
+function formatRp(n: number | string | null | undefined) {
+  if (!n && n !== 0) return '-'
+  return formatCurrencyRp(n)
 }
 
 function toggleExpand(id: number) {

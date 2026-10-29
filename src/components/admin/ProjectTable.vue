@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { proyeksApi, type ProyekResponse } from '@/services/api'
+import { formatRp } from '@/utils/currency'
 
 const router = useRouter()
 const projects = ref<ProyekResponse[]>([])
@@ -84,7 +85,7 @@ const progressColor = (p: number) => {
           <td><span class="project-id">{{ p.kode }}</span></td>
           <td><span class="project-name">{{ p.nama }}</span></td>
           <td><span class="project-client">{{ p.client_nama || '—' }}</span></td>
-          <td><span class="project-value">{{ p.nilai_format }}</span></td>
+          <td><span class="project-value">{{ p.nilai_format || formatRp(p.nilai) }}</span></td>
           <td><span :class="badgeClass(p.status)">{{ p.status }}</span></td>
           <td>
             <div class="progress-wrap">

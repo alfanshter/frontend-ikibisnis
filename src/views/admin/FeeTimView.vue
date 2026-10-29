@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
+import { formatRp } from '@/utils/currency'
 import {
   Wallet, Banknote, Clock, Users,
   Search, ChevronDown, CheckCircle2,
@@ -91,7 +92,7 @@ const totalDibayar = computed(() => filteredList.value.reduce((s, f) => s + f.fe
 const totalSisa = computed(() => totalFee.value - totalDibayar.value)
 const pctDibayar = computed(() => totalFee.value > 0 ? ((totalDibayar.value / totalFee.value) * 100).toFixed(0) : '0')
 
-const fmtRp = (n: number) => 'Rp' + n.toLocaleString('id-ID')
+const fmtRp = (n: number | string | null | undefined) => formatRp(n)
 
 const openProyekFee = (proyekId: number) => {
   router.push(`/admin/proyek/${proyekId}/fee-tim`)

@@ -3,8 +3,8 @@
  * Menghubungkan frontend ke backend Laravel (http://127.0.0.1:8000/api)
  */
 
-const BASE_URL = 'https://ikibisnis.ptpws.id/api'
-// const BASE_URL = 'http://127.0.0.1:8000/api'
+// const BASE_URL = 'https://ikibisnis.ptpws.id/api'
+const BASE_URL = 'http://127.0.0.1:8000/api'
 
 function getToken(): string | null {
   return localStorage.getItem('auth_token')
@@ -558,6 +558,7 @@ export interface LeadPayload {
   perusahaan: string
   pic_id?: number | null
   akses_tipe?: 'personal' | 'role' | 'semua'
+  tampilkan_nilai?: boolean
   allowed_roles?: (string | number)[]
   assigned_users?: number[]
   kebutuhan?: string
@@ -887,6 +888,7 @@ export interface ProyekResponse {
   pic_id: number | null
   pic: string | null
   akses_tipe?: 'personal' | 'role' | 'semua' | null
+  tampilkan_nilai?: boolean
   allowed_roles?: (string | number)[] | null
   tanggal: string | null
   targetSelesai: string | null
@@ -934,6 +936,7 @@ export interface ProyekPayload {
   status_sewa?: string
   pic_id?: number | null
   akses_tipe?: 'personal' | 'role' | 'semua'
+  tampilkan_nilai?: boolean
   allowed_roles?: (string | number)[]
   tim?: Array<{ user_id?: number | null; nama: string; role?: string }>
   tanggal?: string
@@ -1518,5 +1521,65 @@ export const documentNumberingApi = {
   },
   delete: async (id: number): Promise<void> => {
     return request<void>('DELETE', `/document-numberings/${id}`)
+  }
+}
+
+// ─── PDF Settings API ─────────────────────────────────────────────────────────
+export interface PenawaranPdfSettings {
+  pageSize: string
+  orientation: string
+  showHeader: boolean
+  showHeaderImage: boolean
+  headerTitle: string
+  headerSubtitle: string
+  headerImage: string
+  headerImageHeight: number
+  showFooter: boolean
+  showFooterImage: boolean
+  footerText: string
+  footerImage: string
+  footerImageHeight: number
+  showWatermark: boolean
+  showWatermarkImage: boolean
+  watermarkText: string
+  watermarkImage: string
+  documentIntro: string
+  showScopeOfWork: boolean
+  scopeOfWork: string
+  showTerms: boolean
+  termsText: string
+  showSignature: boolean
+  signatureName: string
+  signatureTitle: string
+  signatureImage: string
+  marginTop: number
+  marginRight: number
+  marginBottom: number
+  marginLeft: number
+  fontSize: number
+}
+
+export function getStorageUrl(url: string | null | undefined): string {
+  if (!url) return ''
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url
+  const base = BASE_URL.replace(/\/api\/?$/, '')
+  return `${base}${url.startsWith('/') ? '' : '/'}${url}`
+}
+
+export const pdfSettingsApi = {
+  getPenawaranPdf: async (): Promise<{ success: boolean; data: Partial<PenawaranPdfSettings> | null }> => {
+    return request<{ success: boolean; data: Partial<PenawaranPdfSettings> | null }>('GET', '/settings/penawaran-pdf')
+  },
+  savePenawaranPdf: async (data: Partial<PenawaranPdfSettings>): Promise<{ success: boolean; message: string; data: PenawaranPdfSettings }> => {
+    return request<{ success: boolean; message: string; data: PenawaranPdfSettings }>('POST', '/settings/penawaran-pdf', data as Record<string, unknown>)
+  },
+  uploadImage: async (file: File, type: 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage'): Promise<{ success: boolean; message: string; url: string; path: string; type: string; data: PenawaranPdfSettings }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('type', type)
+    return request<{ success: boolean; message: string; url: string; path: string; type: string; data: PenawaranPdfSettings }>('POST', '/settings/penawaran-pdf/upload-image', formData)
+  },
+  deleteImage: async (type: 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage'): Promise<{ success: boolean; message: string; type: string; data: PenawaranPdfSettings }> => {
+    return request<{ success: boolean; message: string; type: string; data: PenawaranPdfSettings }>('DELETE', '/settings/penawaran-pdf/image', { type })
   }
 }

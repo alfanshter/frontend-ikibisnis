@@ -2,11 +2,12 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
-import { Search, Plus, Wrench, User, Calendar, X, Pencil, Trash2, RefreshCw, AlertCircle, Repeat, Clock, DollarSign, CheckCircle2, CreditCard } from '@lucide/vue'
+import { Search, Plus, Wrench, User, Calendar, X, Pencil, Trash2, RefreshCw, AlertCircle, Repeat, Clock, DollarSign, CheckCircle2, CreditCard, UserCircle } from '@lucide/vue'
 import {
   proyeksApi,
+  usersApi,
   type ProyekResponse, type StatusProyek, type ProyekPayload,
-  type TipeKontrakProyek, type SkemaPembayaranSewa
+  type TipeKontrakProyek, type SkemaPembayaranSewa, type UserResponse
 } from '@/services/api'
 import { formatRp } from '@/utils/currency'
 
@@ -57,7 +58,14 @@ async function fetchProyeks() {
   }
 }
 
-onMounted(fetchProyeks)
+const usersList = ref<UserResponse[]>([])
+
+onMounted(() => {
+  fetchProyeks()
+  usersApi.list().then(res => {
+    usersList.value = res.data
+  }).catch(() => {})
+})
 
 watch(activeFilter, () => {
   currentPage.value = 1
@@ -144,6 +152,9 @@ const emptyForm = () => {
     sewa_durasi_bulan: 12,
     skema_pembayaran:  'Bulanan' as SkemaPembayaranSewa,
     nominal_per_bulan: 0,
+    pic_id:            null as number | null,
+    akses_tipe:        'personal' as 'personal' | 'semua',
+    tampilkan_nilai:   true,
     tanggal:           today,
     target_selesai:    today,
     deskripsi:         '',
@@ -191,6 +202,9 @@ const openEdit = (p: ProyekResponse, e: Event) => {
     sewa_durasi_bulan: p.sewa_durasi_bulan ?? 12,
     skema_pembayaran:  (p.skema_pembayaran ?? 'Bulanan') as SkemaPembayaranSewa,
     nominal_per_bulan: p.nominal_per_bulan ?? 0,
+    pic_id:            p.pic_id ?? null,
+    akses_tipe:        (p.akses_tipe as any) || 'personal',
+    tampilkan_nilai:   p.tampilkan_nilai ?? true,
     tanggal:           p.tanggal ?? new Date().toISOString().slice(0, 10),
     target_selesai:    p.target_selesai ?? new Date().toISOString().slice(0, 10),
     deskripsi:         p.deskripsi ?? '',
@@ -221,6 +235,9 @@ const submitForm = async () => {
       sewa_durasi_bulan: form.value.tipe_kontrak === 'Sewa' ? Number(form.value.sewa_durasi_bulan) : undefined,
       skema_pembayaran:  form.value.tipe_kontrak === 'Sewa' ? form.value.skema_pembayaran : undefined,
       nominal_per_bulan: form.value.tipe_kontrak === 'Sewa' ? (Number(form.value.nominal_per_bulan) || estimasiPerBulan.value) : undefined,
+      pic_id:            form.value.pic_id ?? null,
+      akses_tipe:        form.value.akses_tipe || 'personal',
+      tampilkan_nilai:   form.value.tampilkan_nilai,
       tanggal:           form.value.tanggal || undefined,
       target_selesai:    form.value.target_selesai || undefined,
       deskripsi:         form.value.deskripsi || undefined,
@@ -404,6 +421,9 @@ const formatRupiah = (val?: number | string | null) => formatRp(val)
             >
               {{ p.status_pembayaran === 'Lunas' ? '✓ Lunas' : (p.status_pembayaran === 'Sebagian' ? 'Sebagian' : 'Belum Dibayar') }}
             </span>
+            <span v-if="p.tampilkan_nilai === false" class="badge badge-rahasia" title="Nilai dirahasiakan dari teknisi / non-admin">
+              🔒 Harga Rahasia
+            </span>
           </div>
           <span :class="badgeClass(p.status)">{{ p.status }}</span>
         </div>
@@ -523,6 +543,49 @@ const formatRupiah = (val?: number | string | null) => formatRp(val)
               <div class="form-field">
                 <label class="form-label">Perusahaan / Instansi</label>
                 <input v-model="form.perusahaan" class="form-input" placeholder="PT / CV / Dinas..." />
+              </div>
+            </div>
+
+            <!-- Row 1c: PIC & Hak Akses Proyek -->
+            <div class="form-row">
+              <div class="form-field">
+                <label class="form-label">PIC Internal (Teknisi / Penanggung Jawab)</label>
+                <select v-model="form.pic_id" class="form-select">
+                  <option :value="null">-- Belum Ada PIC --</option>
+                  <option v-for="u in usersList" :key="u.id" :value="u.id">
+                    {{ u.name }} ({{ u.role_name || u.email }})
+                  </option>
+                </select>
+                <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
+                  Pilih staf / teknisi penanggung jawab proyek ini.
+                </span>
+              </div>
+              <div class="form-field">
+                <label class="form-label">Hak Akses Proyek</label>
+                <select v-model="form.akses_tipe" class="form-select">
+                  <option value="personal">🔒 Personal (Hanya PIC &amp; Tim Proyek)</option>
+                  <option value="semua">🌐 Semua Pengguna (Publik)</option>
+                </select>
+                <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
+                  Jika Personal, hanya PIC dan anggota Tim yang bisa melihat proyek ini.
+                </span>
+              </div>
+            </div>
+
+            <!-- Row 1d: Visibilitas Harga ke Teknisi -->
+            <div class="form-row single">
+              <div class="form-field">
+                <label class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
+                  <span>Visibilitas Nilai Kontrak / Harga Proyek</span>
+                  <span style="font-size: 11px; font-weight: normal; color: var(--text-muted);">Sensitivitas Harga</span>
+                </label>
+                <select v-model="form.tampilkan_nilai" class="form-select">
+                  <option :value="true">👁️ Boleh Tampil — Teknisi dapat melihat harga / nominal proyek</option>
+                  <option :value="false">🔒 Sembunyikan Harga — Nilai dirahasiakan dari Teknisi / Non-Admin (Sensitif)</option>
+                </select>
+                <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
+                  Bila disembunyikan, teknisi yang membuka proyek ini tidak akan melihat nominal kontrak, sisa tagihan, maupun info pembayaran.
+                </span>
               </div>
             </div>
 
@@ -849,6 +912,15 @@ const formatRupiah = (val?: number | string | null) => formatRp(val)
   background: rgba(168, 85, 247, 0.15);
   color: #c084fc;
   border: 1px solid rgba(168, 85, 247, 0.35);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+.badge-rahasia {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
   display: inline-flex;
   align-items: center;
   gap: 4px;

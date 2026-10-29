@@ -387,6 +387,45 @@ const convertToSewa = async () => {
   }
 }
 
+// ─── Ubah PIC & Hak Akses ──────────────────────────────────────────────────
+const showEditAccessModal = ref(false)
+const savingAccess = ref(false)
+const editAccessForm = ref({
+  pic_id: null as number | null,
+  akses_tipe: 'personal' as 'personal' | 'semua',
+  tampilkan_nilai: true
+})
+
+function openEditAccessModal() {
+  if (!detailProyek.value) return
+  editAccessForm.value = {
+    pic_id: detailProyek.value.pic_id ?? null,
+    akses_tipe: (detailProyek.value.akses_tipe as any) || 'personal',
+    tampilkan_nilai: detailProyek.value.tampilkan_nilai ?? true
+  }
+  showEditAccessModal.value = true
+}
+
+async function saveEditAccess() {
+  if (!proyekId) return
+  savingAccess.value = true
+  try {
+    const res = await proyeksApi.update(proyekId, {
+      pic_id: editAccessForm.value.pic_id,
+      akses_tipe: editAccessForm.value.akses_tipe,
+      tampilkan_nilai: editAccessForm.value.tampilkan_nilai
+    })
+    detailProyek.value = res.data
+    showEditAccessModal.value = false
+    alert('Pengaturan PIC, Hak Akses & Visibilitas Harga berhasil diperbarui!')
+    await fetchProyekDetail()
+  } catch (err: any) {
+    alert(err.message || 'Gagal mengubah PIC & Hak Akses')
+  } finally {
+    savingAccess.value = false
+  }
+}
+
 // ─── Sewa Jadwal & Pembayaran (Otomatis ke Pembukuan) ────────────────────────
 const sewaJadwalList    = ref<SewaJadwalItem[]>([])
 const sewaSummary       = ref<SewaJadwalSummary | null>(null)
@@ -1148,16 +1187,26 @@ const hapusDirectPayment = async (pembayaranId: number) => {
 
       <!-- ── Informasi Internal ── -->
       <div class="card" style="padding: 24px; margin-bottom: 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
           <h3 class="dp-section-title" style="margin: 0;">Informasi Internal Proyek</h3>
-          <button
-            v-if="detailProyek.tipe_kontrak !== 'Sewa'"
-            @click="convertToSewa"
-            class="btn-subtle-sewa"
-            title="Ubah model proyek menjadi Kontrak Sewa IT"
-          >
-            <Repeat :size="13" /> Jadikan Kontrak Sewa
-          </button>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button
+              type="button"
+              class="btn-secondary"
+              style="padding: 6px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 6px;"
+              @click="openEditAccessModal"
+            >
+              <UserCircle :size="14" /> Ubah PIC &amp; Hak Akses
+            </button>
+            <button
+              v-if="detailProyek.tipe_kontrak !== 'Sewa'"
+              @click="convertToSewa"
+              class="btn-subtle-sewa"
+              title="Ubah model proyek menjadi Kontrak Sewa IT"
+            >
+              <Repeat :size="13" /> Jadikan Kontrak Sewa
+            </button>
+          </div>
         </div>
         <p style="color: var(--text-secondary); line-height: 1.6; margin-bottom: 16px; font-size: 14px;">{{ detailProyek.deskripsi || '—' }}</p>
         <div class="dp-info-grid">
@@ -1189,7 +1238,15 @@ const hapusDirectPayment = async (pembayaranId: number) => {
           </div>
           <div class="dp-info-item">
             <div class="dp-info-label">Nilai Proyek</div>
-            <div class="dp-info-value" style="color: var(--accent-orange); font-weight: 700; font-family: monospace;">{{ detailProyek.nilai_format || 'Rp 0' }}</div>
+            <div class="dp-info-value" style="color: var(--accent-orange); font-weight: 700; font-family: monospace;">
+              {{ detailProyek.nilai_format || 'Rp 0' }}
+              <span
+                v-if="detailProyek.tampilkan_nilai === false"
+                style="font-size: 11px; font-weight: normal; margin-left: 6px; padding: 2px 7px; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3);"
+              >
+                🔒 Dirahasiakan dari Teknisi
+              </span>
+            </div>
           </div>
           <div class="dp-info-item">
             <div class="dp-info-label">Mulai</div>
@@ -1437,6 +1494,8 @@ const hapusDirectPayment = async (pembayaranId: number) => {
       </div>
     </Teleport>
 
+
+
     <!-- ── Modal Generate Invoice Sewa ──────────────────────── -->
     <Teleport to="body">
       <div v-if="showGenerateInvoiceModal" class="modal-overlay" @click.self="showGenerateInvoiceModal = false">
@@ -1521,6 +1580,8 @@ const hapusDirectPayment = async (pembayaranId: number) => {
       </div>
     </Teleport>
 
+
+
     <!-- ── Modal Tambah Anggota / Teknisi Proyek ── -->
     <Teleport to="body">
       <div v-if="showAddMemberModal" class="modal-overlay" @click.self="showAddMemberModal = false">
@@ -1563,6 +1624,8 @@ const hapusDirectPayment = async (pembayaranId: number) => {
         </div>
       </div>
     </Teleport>
+
+
 
     <!-- ── Modal Catat Pembayaran Sewa Bulanan ── -->
     <Teleport to="body">
@@ -1647,6 +1710,8 @@ const hapusDirectPayment = async (pembayaranId: number) => {
         </div>
       </div>
     </Teleport>
+
+
 
     <!-- ── Modal Detail Pembayaran ── -->
     <Teleport to="body">
@@ -1837,6 +1902,78 @@ const hapusDirectPayment = async (pembayaranId: number) => {
         </div>
       </div>
     </Teleport>
+
+
+    <!-- ── Modal Ubah PIC & Hak Akses Proyek ── -->
+    <Teleport to="body">
+      <div v-if="showEditAccessModal" class="modal-overlay" @click.self="showEditAccessModal = false">
+        <div class="modal-box" style="max-width: 520px;">
+          <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <UserCircle :size="18" style="color: var(--accent-orange);" />
+              <h2 style="font-size: 16px; margin: 0;">Ubah PIC &amp; Hak Akses Proyek</h2>
+            </div>
+            <button class="modal-close" @click="showEditAccessModal = false"><X :size="16" /></button>
+          </div>
+
+          <div class="modal-body">
+            <div class="form-row single" style="margin-bottom: 16px;">
+              <div class="form-field">
+                <label class="form-label">PIC Internal (Teknisi Penanggung Jawab)</label>
+                <select v-model="editAccessForm.pic_id" class="form-select">
+                  <option :value="null">-- Belum Ada PIC --</option>
+                  <option v-for="u in usersList" :key="u.id" :value="u.id">
+                    {{ u.name }} ({{ u.role_name || u.email }})
+                  </option>
+                </select>
+                <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px; display: block;">
+                  Pilih teknisi yang ditugaskan sebagai penanggung jawab utama proyek ini.
+                </span>
+              </div>
+            </div>
+
+            <div class="form-row single" style="margin-bottom: 16px;">
+              <div class="form-field">
+                <label class="form-label">Tipe Hak Akses</label>
+                <select v-model="editAccessForm.akses_tipe" class="form-select">
+                  <option value="personal">🔒 Personal (Hanya PIC &amp; Tim Proyek)</option>
+                  <option value="semua">🌐 Semua Pengguna (Publik)</option>
+                </select>
+                <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px; display: block;">
+                  Jika <strong>Personal</strong>, teknisi lain yang bukan PIC dan tidak terdaftar di Tim Proyek tidak akan bisa melihat proyek ini.
+                </span>
+              </div>
+            </div>
+
+            <div class="form-row single" style="margin-bottom: 16px;">
+              <div class="form-field">
+                <label class="form-label">Visibilitas Nilai Kontrak / Harga ke Teknisi</label>
+                <select v-model="editAccessForm.tampilkan_nilai" class="form-select">
+                  <option :value="true">👁️ Boleh Tampil — Teknisi dapat melihat nominal harga</option>
+                  <option :value="false">🔒 Sembunyikan Harga — Nilai dirahasiakan dari Teknisi (Sensitif)</option>
+                </select>
+                <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px; display: block;">
+                  Pilih <strong>Sembunyikan Harga</strong> jika nilai proyek sensitif. Teknisi PIC dapat bekerja menambahkan log &amp; QC tanpa melihat nominal rupiah kontrak.
+                </span>
+              </div>
+            </div>
+
+            <div class="sewa-sim-banner" style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); color: #93c5fd; padding: 12px 14px; border-radius: 8px; font-size: 12.5px;">
+              💡 <strong>Tips Akses Teknisi:</strong><br />
+              Pastikan role Teknisi di <em>Role Management</em> memiliki izin modul <strong>Proyek</strong> aktif (ON). Dengan memilih opsi <strong>Personal</strong>, teknisi hanya dapat membuka proyek di mana dia menjadi PIC atau anggota tim proyek.
+            </div>
+          </div>
+
+          <div class="modal-footer modal-footer-split">
+            <button type="button" class="btn-ghost btn-half" @click="showEditAccessModal = false" :disabled="savingAccess">Batal</button>
+            <button type="button" class="btn-primary btn-half" @click="saveEditAccess" :disabled="savingAccess">
+              {{ savingAccess ? 'Menyimpan...' : 'Simpan Hak Akses' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
   </AdminLayout>
 </template>
 

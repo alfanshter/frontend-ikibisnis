@@ -3,8 +3,8 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import { usePenawaranStore } from '@/stores/penawaran'
-import { leadsApi, partsApi, penawaransApi } from '@/services/api'
-import type { LeadResponse, PartResponse } from '@/services/api'
+import { leadsApi, partsApi, penawaransApi, pdfSettingsApi, getStorageUrl } from '@/services/api'
+import type { LeadResponse, PartResponse, PenawaranPdfSettings } from '@/services/api'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import * as XLSX from 'xlsx'
@@ -12,7 +12,8 @@ import {
   ChevronRight, Plus, CheckCircle2, FileText, Trash2, Save,
   AlertTriangle, Calendar, User, FileDigit, Box, Download,
   ChevronDown, Pencil, Upload, FileSpreadsheet, X,
-  Clock, Building2, MapPin, Send
+  Clock, Building2, MapPin, Send, Sliders, Layers, Eye,
+  RotateCcw, PenLine, Check
 } from '@lucide/vue'
 import WhatsAppIcon from '@/components/WhatsAppIcon.vue'
 import { getWaLink } from '@/utils/whatsapp'
@@ -67,6 +68,11 @@ const isEditMode = ref(false)
 const loadingMaster = ref(false)
 const showAddItemModal = ref(false)
 const showPdfSettings = ref(false)
+const activePdfTab = ref<'header' | 'footer' | 'layout' | 'content' | 'signature'>('header')
+const loadingPdfSettings = ref(false)
+const savingPdfSettings = ref(false)
+const uploadingPdfKey = ref<string | null>(null)
+const generatingPdf = ref(false)
 const pdfSettings = ref({ ...defaultPdfSettings })
 
 // ─── Import Excel State ────────────────────────────────────────────────────
@@ -144,20 +150,148 @@ onMounted(async () => {
   fetchMasterData()
 })
 
-function loadPdfSettings() {
-  if (typeof window === 'undefined') return
-  const raw = window.localStorage.getItem('ikibisnis_penawaran_pdf_settings')
-  if (!raw) return
+async function loadPdfSettings() {
+  if (typeof window !== 'undefined') {
+    const raw = window.localStorage.getItem('ikibisnis_penawaran_pdf_settings')
+    if (raw) {
+      try {
+        pdfSettings.value = { ...defaultPdfSettings, ...JSON.parse(raw) }
+      } catch {
+        pdfSettings.value = { ...defaultPdfSettings }
+      }
+    }
+  }
+
   try {
-    pdfSettings.value = { ...defaultPdfSettings, ...JSON.parse(raw) }
-  } catch {
-    pdfSettings.value = { ...defaultPdfSettings }
+    loadingPdfSettings.value = true
+    const res = await pdfSettingsApi.getPenawaranPdf()
+    if (res?.data && Object.keys(res.data).length > 0) {
+      pdfSettings.value = { ...defaultPdfSettings, ...res.data }
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('ikibisnis_penawaran_pdf_settings', JSON.stringify(pdfSettings.value))
+      }
+    }
+  } catch (err) {
+    console.warn('Gagal memuat pengaturan PDF dari server:', err)
+  } finally {
+    loadingPdfSettings.value = false
   }
 }
 
-function savePdfSettings() {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem('ikibisnis_penawaran_pdf_settings', JSON.stringify(pdfSettings.value))
+async function savePdfSettings(showNotification = true) {
+  try {
+    savingPdfSettings.value = true
+    const res = await pdfSettingsApi.savePenawaranPdf(pdfSettings.value)
+    if (res?.data) {
+      pdfSettings.value = { ...defaultPdfSettings, ...res.data }
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('ikibisnis_penawaran_pdf_settings', JSON.stringify(pdfSettings.value))
+    }
+    if (showNotification) {
+      toast.success('Pengaturan PDF berhasil disimpan ke server!')
+    }
+  } catch (err: any) {
+    console.error('Gagal menyimpan pengaturan PDF ke server:', err)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('ikibisnis_penawaran_pdf_settings', JSON.stringify(pdfSettings.value))
+    }
+    toast.error('Gagal menyimpan ke server: ' + (err.message || 'Error'))
+  } finally {
+    savingPdfSettings.value = false
+  }
+}
+
+function resetPdfSettings() {
+  if (!confirm('Kembalikan semua pengaturan PDF ke default bawaan sistem?')) return
+  pdfSettings.value = { ...defaultPdfSettings }
+  savePdfSettings(true)
+}
+
+function getPdfImageLabel(key: string): string {
+  switch (key) {
+    case 'headerImage': return 'Kop Surat'
+    case 'footerImage': return 'Footer Banner'
+    case 'watermarkImage': return 'Watermark'
+    case 'signatureImage': return 'Tanda Tangan'
+    default: return 'Gambar'
+  }
+}
+
+async function handlePdfImageUpload(event: Event, key: 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage') {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  if (file.size > 10 * 1024 * 1024) {
+    toast.error('Ukuran file maksimal 10MB')
+    input.value = ''
+    return
+  }
+
+  uploadingPdfKey.value = key
+  try {
+    const res = await pdfSettingsApi.uploadImage(file, key)
+    if (res?.url) {
+      pdfSettings.value[key] = res.url
+      if (res.data) {
+        pdfSettings.value = { ...defaultPdfSettings, ...res.data }
+      }
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('ikibisnis_penawaran_pdf_settings', JSON.stringify(pdfSettings.value))
+      }
+      toast.success(`Gambar ${getPdfImageLabel(key)} berhasil disimpan ke storage!`)
+    }
+  } catch (err: any) {
+    console.error('Gagal upload gambar ke storage:', err)
+    toast.error('Gagal upload gambar ke storage: ' + (err.message || 'Error'))
+  } finally {
+    uploadingPdfKey.value = null
+    input.value = ''
+  }
+}
+
+async function removePdfImage(key: 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage') {
+  if (!confirm(`Hapus gambar ${getPdfImageLabel(key)} dari storage?`)) return
+
+  uploadingPdfKey.value = key
+  try {
+    const res = await pdfSettingsApi.deleteImage(key)
+    pdfSettings.value[key] = ''
+    if (res?.data) {
+      pdfSettings.value = { ...defaultPdfSettings, ...res.data }
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('ikibisnis_penawaran_pdf_settings', JSON.stringify(pdfSettings.value))
+    }
+    toast.info(`Gambar ${getPdfImageLabel(key)} dihapus.`)
+  } catch (err: any) {
+    console.error('Gagal menghapus gambar dari server:', err)
+    pdfSettings.value[key] = ''
+    toast.error('Gagal menghapus gambar: ' + (err.message || 'Error'))
+  } finally {
+    uploadingPdfKey.value = null
+  }
+}
+
+async function resolveImageDataUrl(urlOrData: string): Promise<string> {
+  if (!urlOrData) return ''
+  if (urlOrData.startsWith('data:image/')) return urlOrData
+
+  const fullUrl = getStorageUrl(urlOrData)
+  try {
+    const res = await fetch(fullUrl)
+    const blob = await res.blob()
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onloadend = () => resolve((reader.result as string) || '')
+      reader.onerror = () => resolve('')
+      reader.readAsDataURL(blob)
+    })
+  } catch (err) {
+    console.error('Gagal mengonversi gambar ke Data URL untuk PDF:', fullUrl, err)
+    return ''
+  }
 }
 
 function getPdfPageFormat(size: string) {
@@ -190,22 +324,6 @@ function normalizePdfImageData(dataUrl: string, mimeType: 'image/png' = 'image/p
     }
     image.onerror = () => resolve(dataUrl)
   })
-}
-
-async function handlePdfImageUpload(event: Event, key: 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage') {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-
-  const reader = new FileReader()
-  reader.onload = async () => {
-    const result = String(reader.result || '')
-    const normalized = await normalizePdfImageData(result)
-    pdfSettings.value[key] = normalized
-    savePdfSettings()
-  }
-  reader.readAsDataURL(file)
-  input.value = ''
 }
 
 function addPdfImage(doc: jsPDF, imageData: string, x: number, y: number, width: number, height: number, opacity = 1) {
@@ -421,15 +539,31 @@ function ensurePdfSectionSpace(
   return settings.showHeader ? getPdfHeaderHeight(settings) + 8 : top
 }
 
-function generatePdfPreview(saveFile = false) {
+async function generatePdfPreview(saveFile = false) {
   if (!store.selectedData) return
 
-  const settings = pdfSettings.value
-  const doc = new jsPDF({
-    orientation: settings.orientation,
-    unit: 'mm',
-    format: getPdfPageFormat(settings.pageSize)
-  })
+  generatingPdf.value = true
+  try {
+    const [resolvedHeader, resolvedFooter, resolvedWatermark, resolvedSignature] = await Promise.all([
+      resolveImageDataUrl(pdfSettings.value.headerImage),
+      resolveImageDataUrl(pdfSettings.value.footerImage),
+      resolveImageDataUrl(pdfSettings.value.watermarkImage),
+      resolveImageDataUrl(pdfSettings.value.signatureImage),
+    ])
+
+    const settings = {
+      ...pdfSettings.value,
+      headerImage: resolvedHeader,
+      footerImage: resolvedFooter,
+      watermarkImage: resolvedWatermark,
+      signatureImage: resolvedSignature,
+    }
+
+    const doc = new jsPDF({
+      orientation: settings.orientation as any,
+      unit: 'mm',
+      format: getPdfPageFormat(settings.pageSize)
+    })
 
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
@@ -607,11 +741,17 @@ function generatePdfPreview(saveFile = false) {
     doc.text(settings.signatureTitle || 'Direksi / Manager', signatureX + 28, sigY + 38, { align: 'center' })
   }
 
-  if (saveFile) {
-    doc.save(`${(store.selectedData.nomor_penawaran || 'penawaran').replace(/\s+/g, '_')}.pdf`)
-  } else {
-    const pdfUrl = doc.output('bloburl')
-    window.open(pdfUrl, '_blank')
+    if (saveFile) {
+      doc.save(`${(store.selectedData.nomor_penawaran || 'penawaran').replace(/\s+/g, '_')}.pdf`)
+    } else {
+      const pdfUrl = doc.output('bloburl')
+      window.open(pdfUrl, '_blank')
+    }
+  } catch (err: any) {
+    console.error('Error generating PDF:', err)
+    toast.error('Gagal membuat preview PDF: ' + (err.message || 'Error'))
+  } finally {
+    generatingPdf.value = false
   }
 }
 
@@ -621,7 +761,7 @@ function openPdfSettings() {
 
 function closePdfSettings() {
   showPdfSettings.value = false
-  savePdfSettings()
+  savePdfSettings(false)
 }
 
 async function fetchMasterData() {
@@ -1496,179 +1636,590 @@ const itemTaxPreview = computed(() => {
 
     <Teleport to="body">
       <div v-if="showPdfSettings" class="item-modal-overlay" @click.self="closePdfSettings">
-        <div class="item-modal-card" style="width:min(760px,100%);">
-          <div class="item-modal-head">
-            <h4><FileText :size="14" /> Pengaturan Preview PDF</h4>
-            <button class="btn-ghost" @click="closePdfSettings">Tutup</button>
+        <div class="item-modal-card modern-pdf-modal">
+          <!-- Modal Header -->
+          <div class="item-modal-head modern-pdf-head">
+            <div class="head-title-wrap">
+              <div class="head-icon-box">
+                <FileText :size="20" />
+              </div>
+              <div>
+                <h4>Pengaturan Template PDF Penawaran</h4>
+                <p class="head-desc">
+                  Konfigurasi kop surat, footer, tata letak, dan ketentuan. Tersimpan permanen di storage server.
+                </p>
+              </div>
+            </div>
+            <div class="head-actions">
+              <span class="storage-sync-pill">
+                <span class="sync-dot"></span>
+                Tersimpan di Storage
+              </span>
+              <button class="btn-ghost-icon" title="Tutup" @click="closePdfSettings">
+                <X :size="18" />
+              </button>
+            </div>
           </div>
-          <div class="item-modal-body">
-            <div class="pdf-settings-grid">
-              <div class="form-group">
-                <label>Ukuran Kertas</label>
-                <select v-model="pdfSettings.pageSize" class="fs-input">
-                  <option value="A4">A4</option>
-                  <option value="Letter">Letter</option>
-                  <option value="Legal">Legal</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Orientasi</label>
-                <select v-model="pdfSettings.orientation" class="fs-input">
-                  <option value="portrait">Potrait</option>
-                  <option value="landscape">Landscape</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Header</label>
-                <select v-model="pdfSettings.showHeader" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Footer</label>
-                <select v-model="pdfSettings.showFooter" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
-              </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Judul Header</label>
-                <input v-model="pdfSettings.headerTitle" class="fs-input" />
-              </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Subjudul Header</label>
-                <input v-model="pdfSettings.headerSubtitle" class="fs-input" />
-              </div>
-              <div class="form-group">
-                <label>Header Image</label>
-                <select v-model="pdfSettings.showHeaderImage" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Upload Header Image</label>
-                <input type="file" accept="image/*" class="fs-input" @change="handlePdfImageUpload($event, 'headerImage')" />
-                <div v-if="pdfSettings.headerImage" class="pdf-image-preview">
-                  <img :src="pdfSettings.headerImage" alt="Header preview" />
+
+          <!-- Group Navigation Tabs -->
+          <div class="pdf-tabs-nav">
+            <button 
+              type="button" 
+              class="pdf-tab-btn" 
+              :class="{ active: activePdfTab === 'header' }" 
+              @click="activePdfTab = 'header'"
+            >
+              <Building2 :size="15" />
+              <span>Kop & Header</span>
+              <span v-if="pdfSettings.headerImage" class="tab-indicator-dot"></span>
+            </button>
+            <button 
+              type="button" 
+              class="pdf-tab-btn" 
+              :class="{ active: activePdfTab === 'footer' }" 
+              @click="activePdfTab = 'footer'"
+            >
+              <Layers :size="15" />
+              <span>Footer Banner</span>
+              <span v-if="pdfSettings.footerImage" class="tab-indicator-dot"></span>
+            </button>
+            <button 
+              type="button" 
+              class="pdf-tab-btn" 
+              :class="{ active: activePdfTab === 'layout' }" 
+              @click="activePdfTab = 'layout'"
+            >
+              <Sliders :size="15" />
+              <span>Kertas & Margin</span>
+            </button>
+            <button 
+              type="button" 
+              class="pdf-tab-btn" 
+              :class="{ active: activePdfTab === 'content' }" 
+              @click="activePdfTab = 'content'"
+            >
+              <FileSpreadsheet :size="15" />
+              <span>Konten & Ketentuan</span>
+            </button>
+            <button 
+              type="button" 
+              class="pdf-tab-btn" 
+              :class="{ active: activePdfTab === 'signature' }" 
+              @click="activePdfTab = 'signature'"
+            >
+              <PenLine :size="15" />
+              <span>TTD & Watermark</span>
+              <span v-if="pdfSettings.signatureImage || pdfSettings.watermarkImage" class="tab-indicator-dot"></span>
+            </button>
+          </div>
+
+          <!-- Modal Body with Groups -->
+          <div class="item-modal-body modern-pdf-body">
+            <!-- TAB 1: KOP & HEADER -->
+            <div v-show="activePdfTab === 'header'" class="pdf-tab-pane">
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Status & Teks Header</h5>
+                    <p>Atur visibilitas dan teks identitas kop surat penawaran</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showHeader" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showHeader ? 'Aktif' : 'Nonaktif' }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="pdfSettings.showHeader" class="group-card-content">
+                  <div class="form-grid-2">
+                    <div class="form-group">
+                      <label>Judul Header</label>
+                      <input v-model="pdfSettings.headerTitle" class="fs-input" placeholder="Contoh: PENAWARAN HARGA" />
+                      <span class="hint-text">Ditampilkan jika tidak menggunakan banner gambar kop</span>
+                    </div>
+                    <div class="form-group">
+                      <label>Subjudul Header / Perusahaan</label>
+                      <input v-model="pdfSettings.headerSubtitle" class="fs-input" placeholder="Contoh: PT Ikibisnis / PT Putra Wisanggeni Satu" />
+                      <span class="hint-text">Nama instansi / subtitle di bawah judul header</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div class="form-group">
-                <label>Tinggi Header Image (mm)</label>
-                <input v-model.number="pdfSettings.headerImageHeight" type="number" class="fs-input" min="18" max="80" />
-              </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Deskripsi Dokumen</label>
-                <textarea v-model="pdfSettings.documentIntro" class="fs-textarea" rows="3"></textarea>
-              </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Watermark Teks</label>
-                <input v-model="pdfSettings.watermarkText" class="fs-input" placeholder="Contoh: DRAFT / CONFIDENTIAL" />
-              </div>
-              <div class="form-group">
-                <label>Watermark</label>
-                <select v-model="pdfSettings.showWatermark" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Scope of Work</label>
-                <select v-model="pdfSettings.showScopeOfWork" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Watermark Image</label>
-                <select v-model="pdfSettings.showWatermarkImage" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
-              </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Upload Watermark Image</label>
-                <input type="file" accept="image/*" class="fs-input" @change="handlePdfImageUpload($event, 'watermarkImage')" />
-                <div v-if="pdfSettings.watermarkImage" class="pdf-image-preview">
-                  <img :src="pdfSettings.watermarkImage" alt="Watermark preview" />
+
+              <!-- Kop Image Card -->
+              <div v-if="pdfSettings.showHeader" class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Gambar Banner Kop Surat (Storage)</h5>
+                    <p>Gunakan gambar resmi kop surat perusahaan dengan resolusi tinggi</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showHeaderImage" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showHeaderImage ? 'Gunakan Gambar' : 'Teks Saja' }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="pdfSettings.showHeaderImage" class="group-card-content">
+                  <!-- Storage Image Upload Card -->
+                  <div class="image-storage-box">
+                    <div v-if="pdfSettings.headerImage" class="uploaded-image-preview">
+                      <div class="preview-img-container">
+                        <img :src="getStorageUrl(pdfSettings.headerImage)" alt="Kop Surat Preview" />
+                      </div>
+                      <div class="preview-details">
+                        <div class="file-status">
+                          <span class="badge-success"><Check :size="12" /> Tersimpan di Storage Server</span>
+                          <span class="file-path-hint">{{ pdfSettings.headerImage }}</span>
+                        </div>
+                        <div class="file-actions">
+                          <label class="btn-file-change">
+                            <Upload :size="13" /> Ganti Gambar
+                            <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'headerImage')" />
+                          </label>
+                          <button type="button" class="btn-file-delete" @click="removePdfImage('headerImage')" :disabled="uploadingPdfKey === 'headerImage'">
+                            <Trash2 :size="13" /> Hapus
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div v-else class="upload-dropzone">
+                      <label class="dropzone-label">
+                        <div class="dropzone-icon">
+                          <Upload :size="24" class="text-accent-blue" />
+                        </div>
+                        <span class="dropzone-main">Klik atau pilih file gambar Kop Surat</span>
+                        <span class="dropzone-sub">Format PNG atau JPG (Ukuran rasio disarankan ~1200 x 200 px, maks 10MB)</span>
+                        <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'headerImage')" />
+                      </label>
+                    </div>
+
+                    <div v-if="uploadingPdfKey === 'headerImage'" class="upload-progress-overlay">
+                      <div class="spinner-sm"></div>
+                      <span>Menyimpan ke Storage...</span>
+                    </div>
+                  </div>
+
+                  <div class="form-grid-2 mt-3">
+                    <div class="form-group">
+                      <label>Tinggi Kop Surat (mm)</label>
+                      <div class="range-with-number">
+                        <input v-model.number="pdfSettings.headerImageHeight" type="range" min="18" max="80" class="fs-range" />
+                        <span class="range-val">{{ pdfSettings.headerImageHeight || 32 }} mm</span>
+                      </div>
+                      <span class="hint-text">Standar: 30 - 35 mm. Sesuaikan bila kop terpotong.</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div class="form-group">
-                <label>Footer Text</label>
-                <input v-model="pdfSettings.footerText" class="fs-input" />
-              </div>
-              <div class="form-group">
-                <label>Footer Image</label>
-                <select v-model="pdfSettings.showFooterImage" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
-              </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Upload Footer Image</label>
-                <input type="file" accept="image/*" class="fs-input" @change="handlePdfImageUpload($event, 'footerImage')" />
-                <div v-if="pdfSettings.footerImage" class="pdf-image-preview">
-                  <img :src="pdfSettings.footerImage" alt="Footer preview" />
+            </div>
+
+            <!-- TAB 2: FOOTER -->
+            <div v-show="activePdfTab === 'footer'" class="pdf-tab-pane">
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Status & Teks Footer</h5>
+                    <p>Atur visibilitas teks footer dan penomoran otomatis halaman PDF</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showFooter" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showFooter ? 'Aktif' : 'Nonaktif' }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="pdfSettings.showFooter" class="group-card-content">
+                  <div class="form-group">
+                    <label>Teks Catatan Kaki / Footer</label>
+                    <input v-model="pdfSettings.footerText" class="fs-input" placeholder="Contoh: Dokumen ini diterbitkan oleh PT Ikibisnis - Sah tanpa tanda tangan basah" />
+                    <span class="hint-text">Nomor halaman ("Halaman X") otomatis disematkan di sisi kanan bawah.</span>
+                  </div>
                 </div>
               </div>
-              <div class="form-group">
-                <label>Tinggi Footer Image (mm)</label>
-                <input v-model.number="pdfSettings.footerImageHeight" type="number" class="fs-input" min="12" max="80" />
+
+              <!-- Footer Image Card -->
+              <div v-if="pdfSettings.showFooter" class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Gambar Footer Banner (Storage)</h5>
+                    <p>Gunakan banner visual di bagian dasar kertas (kontak, legalitas, atau ilustrasi)</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showFooterImage" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showFooterImage ? 'Gunakan Gambar' : 'Teks Saja' }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="pdfSettings.showFooterImage" class="group-card-content">
+                  <div class="image-storage-box">
+                    <div v-if="pdfSettings.footerImage" class="uploaded-image-preview">
+                      <div class="preview-img-container">
+                        <img :src="getStorageUrl(pdfSettings.footerImage)" alt="Footer Preview" />
+                      </div>
+                      <div class="preview-details">
+                        <div class="file-status">
+                          <span class="badge-success"><Check :size="12" /> Tersimpan di Storage Server</span>
+                          <span class="file-path-hint">{{ pdfSettings.footerImage }}</span>
+                        </div>
+                        <div class="file-actions">
+                          <label class="btn-file-change">
+                            <Upload :size="13" /> Ganti Gambar
+                            <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'footerImage')" />
+                          </label>
+                          <button type="button" class="btn-file-delete" @click="removePdfImage('footerImage')" :disabled="uploadingPdfKey === 'footerImage'">
+                            <Trash2 :size="13" /> Hapus
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div v-else class="upload-dropzone">
+                      <label class="dropzone-label">
+                        <div class="dropzone-icon">
+                          <Upload :size="24" class="text-accent-blue" />
+                        </div>
+                        <span class="dropzone-main">Klik atau pilih file gambar Footer</span>
+                        <span class="dropzone-sub">Format PNG atau JPG (Ukuran rasio disarankan ~1200 x 120 px, maks 10MB)</span>
+                        <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'footerImage')" />
+                      </label>
+                    </div>
+
+                    <div v-if="uploadingPdfKey === 'footerImage'" class="upload-progress-overlay">
+                      <div class="spinner-sm"></div>
+                      <span>Menyimpan ke Storage...</span>
+                    </div>
+                  </div>
+
+                  <div class="form-grid-2 mt-3">
+                    <div class="form-group">
+                      <label>Tinggi Footer Banner (mm)</label>
+                      <div class="range-with-number">
+                        <input v-model.number="pdfSettings.footerImageHeight" type="range" min="12" max="80" class="fs-range" />
+                        <span class="range-val">{{ pdfSettings.footerImageHeight || 20 }} mm</span>
+                      </div>
+                      <span class="hint-text">Standar: 15 - 25 mm.</span>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Scope of Work (baris per line)</label>
-                <textarea v-model="pdfSettings.scopeOfWork" class="fs-textarea" rows="4" placeholder="Contoh: - Analisis kebutuhan\n- Desain UI/UX\n- Pengembangan aplikasi"></textarea>
+            </div>
+
+            <!-- TAB 3: KERTAS & MARGIN -->
+            <div v-show="activePdfTab === 'layout'" class="pdf-tab-pane">
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Format & Orientasi Kertas</h5>
+                    <p>Pilih ukuran kertas cetak dan arah orientasi dokumen</p>
+                  </div>
+                </div>
+                <div class="group-card-content">
+                  <div class="form-grid-2">
+                    <div class="form-group">
+                      <label>Ukuran Kertas</label>
+                      <div class="segmented-control">
+                        <button type="button" :class="{ active: pdfSettings.pageSize === 'A4' }" @click="pdfSettings.pageSize = 'A4'">A4</button>
+                        <button type="button" :class="{ active: pdfSettings.pageSize === 'Letter' }" @click="pdfSettings.pageSize = 'Letter'">Letter</button>
+                        <button type="button" :class="{ active: pdfSettings.pageSize === 'Legal' }" @click="pdfSettings.pageSize = 'Legal'">Legal</button>
+                      </div>
+                    </div>
+                    <div class="form-group">
+                      <label>Orientasi</label>
+                      <div class="segmented-control">
+                        <button type="button" :class="{ active: pdfSettings.orientation === 'portrait' }" @click="pdfSettings.orientation = 'portrait'">Portrait (Tegak)</button>
+                        <button type="button" :class="{ active: pdfSettings.orientation === 'landscape' }" @click="pdfSettings.orientation = 'landscape'">Landscape (Mendatar)</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Terms & Conditions</label>
-                <textarea v-model="pdfSettings.termsText" class="fs-textarea" rows="4"></textarea>
+
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Batas Margin & Tipografi Dokumen</h5>
+                    <p>Atur jarak batas tepi halaman dan ukuran teks isi tabel penawaran</p>
+                  </div>
+                </div>
+                <div class="group-card-content">
+                  <div class="margin-box-layout">
+                    <div class="margin-input-col margin-top">
+                      <label>Margin Atas (mm)</label>
+                      <input v-model.number="pdfSettings.marginTop" type="number" class="fs-input-sm" min="0" max="60" />
+                    </div>
+                    <div class="margin-input-row">
+                      <div class="margin-input-col margin-left">
+                        <label>Margin Kiri (mm)</label>
+                        <input v-model.number="pdfSettings.marginLeft" type="number" class="fs-input-sm" min="0" max="60" />
+                      </div>
+                      <div class="margin-center-preview">
+                        <div class="doc-sheet-preview">
+                          <div class="sheet-content">Area Konten</div>
+                        </div>
+                      </div>
+                      <div class="margin-input-col margin-right">
+                        <label>Margin Kanan (mm)</label>
+                        <input v-model.number="pdfSettings.marginRight" type="number" class="fs-input-sm" min="0" max="60" />
+                      </div>
+                    </div>
+                    <div class="margin-input-col margin-bottom">
+                      <label>Margin Bawah (mm)</label>
+                      <input v-model.number="pdfSettings.marginBottom" type="number" class="fs-input-sm" min="0" max="60" />
+                    </div>
+                  </div>
+
+                  <div class="form-group mt-4" style="max-width: 340px; margin: 16px auto 0 auto;">
+                    <label>Ukuran Font Dokumen (pt)</label>
+                    <div class="range-with-number">
+                      <input v-model.number="pdfSettings.fontSize" type="range" min="8" max="14" class="fs-range" />
+                      <span class="range-val">{{ pdfSettings.fontSize || 10 }} pt</span>
+                    </div>
+                    <span class="hint-text">Standar: 10 pt (Ukuran teks rincian tabel penawaran).</span>
+                  </div>
+                </div>
               </div>
-              <div class="form-group">
-                <label>Show Tanda Tangan</label>
-                <select v-model="pdfSettings.showSignature" class="fs-input">
-                  <option :value="true">Tampilkan</option>
-                  <option :value="false">Sembunyikan</option>
-                </select>
+            </div>
+
+            <!-- TAB 4: KONTEN & KETENTUAN -->
+            <div v-show="activePdfTab === 'content'" class="pdf-tab-pane">
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Deskripsi Pembuka (Intro)</h5>
+                    <p>Paragraf pembuka surat penawaran sebelum rincian item harga</p>
+                  </div>
+                </div>
+                <div class="group-card-content">
+                  <div class="form-group">
+                    <textarea v-model="pdfSettings.documentIntro" class="fs-textarea" rows="3" placeholder="Bersama ini kami sampaikan penawaran harga untuk kebutuhan berikut. Mohon diperiksa dan dapat dikonfirmasi kembali sesuai kebutuhan Anda."></textarea>
+                  </div>
+                </div>
               </div>
-              <div class="form-group">
-                <label>Upload Tanda Tangan</label>
-                <input type="file" accept="image/*" class="fs-input" @change="handlePdfImageUpload($event, 'signatureImage')" />
+
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Scope of Work (Ruang Lingkup Pekerjaan)</h5>
+                    <p>Tampilkan rincian lingkup tugas atau deskripsi pekerjaan</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showScopeOfWork" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showScopeOfWork ? 'Tampilkan' : 'Sembunyikan' }}</span>
+                    </label>
+                  </div>
+                </div>
+                <div v-if="pdfSettings.showScopeOfWork" class="group-card-content">
+                  <div class="form-group">
+                    <label>Rincian Scope of Work (Tulis per baris)</label>
+                    <textarea v-model="pdfSettings.scopeOfWork" class="fs-textarea" rows="4" placeholder="- Analisis kebutuhan & survei lapangan&#10;- Pengadaan perangkat & instalasi&#10;- Konfigurasi & testing operasional&#10;- Garansi pemeliharaan"></textarea>
+                    <span class="hint-text">Jika dikosongkan, otomatis mengambil daftar item penawaran beserta keterangannya.</span>
+                  </div>
+                </div>
               </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Nama Penandatangan</label>
-                <input v-model="pdfSettings.signatureName" class="fs-input" />
+
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Syarat & Ketentuan (Terms & Conditions)</h5>
+                    <p>Poin-poin kesepakatan penawaran, masa berlaku harga, dan pembayaran</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showTerms" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showTerms ? 'Tampilkan' : 'Sembunyikan' }}</span>
+                    </label>
+                  </div>
+                </div>
+                <div v-if="pdfSettings.showTerms" class="group-card-content">
+                  <div class="form-group">
+                    <label>Poin Syarat & Ketentuan (Tulis per baris)</label>
+                    <textarea v-model="pdfSettings.termsText" class="fs-textarea" rows="4" placeholder="1. Harga yang tertera berlaku sesuai tanggal validitas penawaran.&#10;2. Pembayaran uang muka (DP) 50% setelah PO diterbitkan.&#10;3. Pelunasan dilakukan setelah pekerjaan selesai dan serah terima dilakukan."></textarea>
+                  </div>
+                </div>
               </div>
-              <div class="form-group" style="grid-column: span 2;">
-                <label>Jabatan Penandatangan</label>
-                <input v-model="pdfSettings.signatureTitle" class="fs-input" />
+            </div>
+
+            <!-- TAB 5: TTD & WATERMARK -->
+            <div v-show="activePdfTab === 'signature'" class="pdf-tab-pane">
+              <!-- Tanda Tangan Card -->
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Blok Tanda Tangan & Pengesahan</h5>
+                    <p>Atur nama penandatangan, jabatan resmi, dan stempel/tanda tangan digital</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showSignature" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showSignature ? 'Tampilkan' : 'Sembunyikan' }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="pdfSettings.showSignature" class="group-card-content">
+                  <div class="form-grid-2">
+                    <div class="form-group">
+                      <label>Nama Penandatangan / Perusahaan</label>
+                      <input v-model="pdfSettings.signatureName" class="fs-input" placeholder="Contoh: PT Ikibisnis / Hendra Wijaya" />
+                    </div>
+                    <div class="form-group">
+                      <label>Jabatan Penandatangan</label>
+                      <input v-model="pdfSettings.signatureTitle" class="fs-input" placeholder="Contoh: Direktur Utama / Project Manager" />
+                    </div>
+                  </div>
+
+                  <!-- Signature Image -->
+                  <div class="mt-3">
+                    <label class="hint-text mb-2 block" style="font-weight: 500; color: var(--text-secondary);">Gambar Tanda Tangan / Stempel Digital</label>
+                    <div class="image-storage-box">
+                      <div v-if="pdfSettings.signatureImage" class="uploaded-image-preview">
+                        <div class="preview-img-container" style="max-height: 85px;">
+                          <img :src="getStorageUrl(pdfSettings.signatureImage)" alt="Tanda Tangan Preview" />
+                        </div>
+                        <div class="preview-details">
+                          <div class="file-status">
+                            <span class="badge-success"><Check :size="12" /> Tersimpan di Storage</span>
+                          </div>
+                          <div class="file-actions">
+                            <label class="btn-file-change">
+                              <Upload :size="13" /> Ganti TTD
+                              <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'signatureImage')" />
+                            </label>
+                            <button type="button" class="btn-file-delete" @click="removePdfImage('signatureImage')" :disabled="uploadingPdfKey === 'signatureImage'">
+                              <Trash2 :size="13" /> Hapus
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div v-else class="upload-dropzone">
+                        <label class="dropzone-label" style="padding: 16px;">
+                          <div class="dropzone-icon">
+                            <PenLine :size="20" class="text-accent-blue" />
+                          </div>
+                          <span class="dropzone-main">Pilih file tanda tangan / stempel (PNG transparan disarankan)</span>
+                          <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'signatureImage')" />
+                        </label>
+                      </div>
+
+                      <div v-if="uploadingPdfKey === 'signatureImage'" class="upload-progress-overlay">
+                        <div class="spinner-sm"></div>
+                        <span>Menyimpan ke Storage...</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div class="form-group">
-                <label>Margin Atas (mm)</label>
-                <input v-model.number="pdfSettings.marginTop" type="number" class="fs-input" min="0" />
-              </div>
-              <div class="form-group">
-                <label>Margin Kiri (mm)</label>
-                <input v-model.number="pdfSettings.marginLeft" type="number" class="fs-input" min="0" />
-              </div>
-              <div class="form-group">
-                <label>Margin Kanan (mm)</label>
-                <input v-model.number="pdfSettings.marginRight" type="number" class="fs-input" min="0" />
-              </div>
-              <div class="form-group">
-                <label>Margin Bawah (mm)</label>
-                <input v-model.number="pdfSettings.marginBottom" type="number" class="fs-input" min="0" />
-              </div>
-              <div class="form-group">
-                <label>Ukuran Font</label>
-                <input v-model.number="pdfSettings.fontSize" type="number" class="fs-input" min="8" max="14" />
+
+              <!-- Watermark Card -->
+              <div class="pdf-group-card">
+                <div class="group-card-header">
+                  <div>
+                    <h5>Watermark Dokumen (Latar Belakang)</h5>
+                    <p>Beri penanda keabsahan atau status dokumen transparan di belakang halaman</p>
+                  </div>
+                  <div class="toggle-wrap">
+                    <label class="modern-toggle">
+                      <input type="checkbox" v-model="pdfSettings.showWatermark" />
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">{{ pdfSettings.showWatermark ? 'Aktif' : 'Nonaktif' }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="pdfSettings.showWatermark" class="group-card-content">
+                  <div class="form-group">
+                    <label>Teks Watermark</label>
+                    <input v-model="pdfSettings.watermarkText" class="fs-input" placeholder="Contoh: DRAFT / CONFIDENTIAL / ASLI" />
+                    <span class="hint-text">Dicetak diagonal 45 derajat secara transparan di tengah halaman.</span>
+                  </div>
+
+                  <div class="mt-4 pt-3" style="border-top: 1px solid var(--border-color);">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                      <label style="font-size: 13px; font-weight: 500; color: var(--text-primary); margin: 0;">Gunakan Gambar Logo Sebagai Watermark</label>
+                      <label class="modern-toggle">
+                        <input type="checkbox" v-model="pdfSettings.showWatermarkImage" />
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+
+                    <div v-if="pdfSettings.showWatermarkImage" class="image-storage-box">
+                      <div v-if="pdfSettings.watermarkImage" class="uploaded-image-preview">
+                        <div class="preview-img-container" style="max-height: 85px;">
+                          <img :src="getStorageUrl(pdfSettings.watermarkImage)" alt="Watermark Image Preview" />
+                        </div>
+                        <div class="preview-details">
+                          <div class="file-status">
+                            <span class="badge-success"><Check :size="12" /> Tersimpan di Storage</span>
+                          </div>
+                          <div class="file-actions">
+                            <label class="btn-file-change">
+                              <Upload :size="13" /> Ganti Gambar
+                              <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'watermarkImage')" />
+                            </label>
+                            <button type="button" class="btn-file-delete" @click="removePdfImage('watermarkImage')" :disabled="uploadingPdfKey === 'watermarkImage'">
+                              <Trash2 :size="13" /> Hapus
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div v-else class="upload-dropzone">
+                        <label class="dropzone-label" style="padding: 16px;">
+                          <div class="dropzone-icon">
+                            <Upload :size="20" class="text-accent-blue" />
+                          </div>
+                          <span class="dropzone-main">Pilih file logo watermark (PNG transparan disarankan)</span>
+                          <input type="file" accept="image/*" class="sr-only" @change="handlePdfImageUpload($event, 'watermarkImage')" />
+                        </label>
+                      </div>
+
+                      <div v-if="uploadingPdfKey === 'watermarkImage'" class="upload-progress-overlay">
+                        <div class="spinner-sm"></div>
+                        <span>Menyimpan ke Storage...</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-          <div class="item-modal-foot">
-            <button class="btn-ghost" @click="closePdfSettings">Batal</button>
-            <button class="btn-primary" @click="generatePdfPreview(false)">Preview PDF</button>
-            <button class="btn-secondary" @click="generatePdfPreview(true)">Download PDF</button>
+
+          <!-- Modal Footer Actions -->
+          <div class="item-modal-foot modern-pdf-foot">
+            <div class="foot-left">
+              <button type="button" class="btn-ghost-danger" @click="resetPdfSettings" title="Kembalikan semua pengaturan ke default">
+                <RotateCcw :size="14" /> Reset Default
+              </button>
+            </div>
+            <div class="foot-right">
+              <button type="button" class="btn-ghost" @click="closePdfSettings">Tutup</button>
+              <button type="button" class="btn-save-storage" @click="savePdfSettings(true)" :disabled="savingPdfSettings">
+                <Save :size="15" />
+                <span>{{ savingPdfSettings ? 'Menyimpan...' : 'Simpan ke Server' }}</span>
+              </button>
+              <button type="button" class="btn-secondary" @click="generatePdfPreview(false)" :disabled="generatingPdf">
+                <Eye :size="15" /> Preview PDF
+              </button>
+              <button type="button" class="btn-primary" @click="generatePdfPreview(true)" :disabled="generatingPdf">
+                <Download :size="15" /> Download PDF
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2229,28 +2780,654 @@ const itemTaxPreview = computed(() => {
   font-weight: 500;
 }
 
-.pdf-settings-grid {
+/* Modern PDF Settings Modal */
+.modern-pdf-modal {
+  width: min(880px, 96vw) !important;
+  max-height: 90vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 14px !important;
+  overflow: hidden !important;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45) !important;
+}
+
+.modern-pdf-head {
+  padding: 16px 22px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+
+.head-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.head-icon-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #3b82f6;
+  flex-shrink: 0;
+}
+
+.head-title-wrap h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.head-desc {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.storage-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #10b981;
+  white-space: nowrap;
+}
+
+.sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+
+.btn-ghost-icon {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.btn-ghost-icon:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+/* Tabs Navigation */
+.pdf-tabs-nav {
+  display: flex;
+  gap: 4px;
+  padding: 8px 18px 0 18px;
+  background: rgba(0, 0, 0, 0.12);
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.pdf-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.pdf-tab-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px 6px 0 0;
+}
+
+.pdf-tab-btn.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 6px 6px 0 0;
+  font-weight: 600;
+}
+
+.tab-indicator-dot {
+  width: 6px;
+  height: 6px;
+  background: #3b82f6;
+  border-radius: 50%;
+  position: absolute;
+  top: 7px;
+  right: 6px;
+}
+
+/* Body & Groups */
+.modern-pdf-body {
+  padding: 20px !important;
+  max-height: calc(85vh - 145px) !important;
+  overflow-y: auto !important;
+}
+
+.pdf-tab-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pdf-group-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.pdf-group-card:hover {
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.group-card-header {
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.group-card-header h5 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group-card-header p {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.group-card-content {
+  padding: 16px 18px;
+}
+
+.form-grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
-.pdf-image-preview {
-  margin-top: 10px;
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
-  border-radius: 8px;
-  padding: 8px;
+@media (max-width: 640px) {
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Modern Toggle Switch */
+.modern-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.modern-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  background-color: #273142;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  transition: background-color 0.25s, border-color 0.25s;
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #cbd5e1;
+  border-radius: 50%;
+  transition: transform 0.25s, background-color 0.25s;
+}
+
+.modern-toggle input:checked + .toggle-slider {
+  background-color: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.modern-toggle input:checked + .toggle-slider::before {
+  transform: translateX(18px);
+  background-color: #ffffff;
+}
+
+.toggle-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* Storage Image Box */
+.image-storage-box {
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+.uploaded-image-preview {
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 12px;
+}
+
+.preview-img-container {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 52px;
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 8px;
+  max-height: 110px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
 }
 
-.pdf-image-preview img {
+.preview-img-container img {
   max-width: 100%;
-  max-height: 72px;
+  max-height: 90px;
   object-fit: contain;
+}
+
+.preview-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.file-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.badge-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #10b981;
+}
+
+.file-path-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-file-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-file-change:hover {
+  background: rgba(59, 130, 246, 0.22);
+}
+
+.btn-file-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-file-delete:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
+}
+
+.upload-dropzone {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.dropzone-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  width: 100%;
+  cursor: pointer;
+  border: 2px dashed var(--border-color);
+  border-radius: 10px;
+  transition: all 0.2s;
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.dropzone-label:hover {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.dropzone-icon {
+  margin-bottom: 8px;
+  padding: 10px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.dropzone-main {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.dropzone-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.upload-progress-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(13, 17, 23, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #60a5fa;
+  z-index: 10;
+}
+
+.spinner-sm {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(96, 165, 250, 0.2);
+  border-top-color: #60a5fa;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Range Input With Number */
+.range-with-number {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fs-range {
+  flex: 1;
+  accent-color: #3b82f6;
+}
+
+.range-val {
+  min-width: 55px;
+  padding: 4px 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Segmented Control */
+.segmented-control {
+  display: flex;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.segmented-control button {
+  flex: 1;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.segmented-control button:hover {
+  color: var(--text-primary);
+}
+
+.segmented-control button.active {
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Margin Box Layout */
+.margin-box-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-base);
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  max-width: 440px;
+  margin: 0 auto;
+}
+
+.margin-input-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.margin-input-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.margin-input-col label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.fs-input-sm {
+  width: 72px;
+  padding: 6px 8px;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.margin-center-preview {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.doc-sheet-preview {
+  width: 100px;
+  height: 60px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
+.sheet-content {
+  width: 100%;
+  height: 100%;
+  border: 1px dashed #94a3b8;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* Modal Footer */
+.modern-pdf-foot {
+  padding: 14px 22px !important;
+  border-top: 1px solid var(--border-color) !important;
+  background: rgba(0, 0, 0, 0.18) !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  gap: 10px !important;
+  flex-wrap: wrap !important;
+}
+
+.foot-left {
+  display: flex;
+  align-items: center;
+}
+
+.foot-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-ghost-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: transparent;
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-ghost-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.btn-save-storage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #10b981;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(16, 185, 129, 0.25);
+  transition: all 0.2s;
+}
+
+.btn-save-storage:hover:not(:disabled) {
+  background: #059669;
+}
+
+.btn-save-storage:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .rounding-row {

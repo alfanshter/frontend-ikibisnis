@@ -146,7 +146,7 @@ onMounted(async () => {
     return
   }
   store.selectId(penawaranId)
-  store.fetchOne(penawaranId)
+  await store.fetchOne(penawaranId)
   fetchMasterData()
 })
 
@@ -331,8 +331,7 @@ function addPdfImage(doc: jsPDF, imageData: string, x: number, y: number, width:
 
   try {
     let format: 'PNG' | 'JPEG' = 'PNG'
-    if (imageData.startsWith('data:image/jpeg')) format = 'JPEG'
-    if (imageData.startsWith('data:image/jpg')) format = 'JPEG'
+    if (imageData.startsWith('data:image/jpeg') || imageData.startsWith('data:image/jpg')) format = 'JPEG'
 
     if (opacity < 1 && 'GState' in doc) {
       const gState = new (doc as any).GState({ opacity })
@@ -360,51 +359,36 @@ function addPdfImageContain(
 
   try {
     const properties = doc.getImageProperties(imageData)
-    const imageRatio = properties.width / properties.height
-    const areaRatio = width / height
-    const renderWidth = imageRatio >= areaRatio ? width : height * imageRatio
-    const renderHeight = imageRatio >= areaRatio ? width / imageRatio : height
-    const imageX = x + ((width - renderWidth) / 2)
-    const imageY = y + ((height - renderHeight) / 2)
+    if (properties && properties.width && properties.height) {
+      const imageRatio = properties.width / properties.height
+      const areaRatio = width / height
+      const renderWidth = imageRatio >= areaRatio ? width : height * imageRatio
+      const renderHeight = imageRatio >= areaRatio ? width / imageRatio : height
+      const imageX = x + ((width - renderWidth) / 2)
+      const imageY = y + ((height - renderHeight) / 2)
 
-    addPdfImage(doc, imageData, imageX, imageY, renderWidth, renderHeight, opacity)
+      addPdfImage(doc, imageData, imageX, imageY, renderWidth, renderHeight, opacity)
+      return
+    }
+    addPdfImage(doc, imageData, x, y, width, height, opacity)
   } catch {
     addPdfImage(doc, imageData, x, y, width, height, opacity)
   }
 }
 
-function addPdfImageCover(
-  doc: jsPDF,
-  imageData: string,
-  x: number,
-  y: number,
-  width: number,
-  height: number
-) {
-  if (!imageData) return
-
-  try {
-    const properties = doc.getImageProperties(imageData)
-    const imageRatio = properties.width / properties.height
-    const areaRatio = width / height
-    const renderWidth = imageRatio >= areaRatio ? height * imageRatio : width
-    const renderHeight = imageRatio >= areaRatio ? height : width / imageRatio
-    const imageX = x + ((width - renderWidth) / 2)
-    const imageY = y + ((height - renderHeight) / 2)
-
-    doc.saveGraphicsState()
-    doc.rect(x, y, width, height)
-    doc.clip()
-    addPdfImage(doc, imageData, imageX, imageY, renderWidth, renderHeight)
-    doc.restoreGraphicsState()
-  } catch {
-    addPdfImage(doc, imageData, x, y, width, height)
-  }
-}
-
-function getPdfHeaderHeight(settings: any) {
+function getPdfHeaderHeight(doc: jsPDF, settings: any, pageWidth: number) {
+  const configuredHeight = Math.max(18, Number(settings.headerImageHeight) || 32)
   if (settings.showHeaderImage && settings.headerImage) {
-    return Math.max(18, Number(settings.headerImageHeight) || 32)
+    try {
+      const properties = doc.getImageProperties(settings.headerImage)
+      if (properties && properties.width && properties.height) {
+        const proportionalHeight = pageWidth * (properties.height / properties.width)
+        return Math.max(configuredHeight, Math.min(65, proportionalHeight))
+      }
+      return configuredHeight
+    } catch {
+      return configuredHeight
+    }
   }
 
   return 18
@@ -415,8 +399,11 @@ function getPdfFooterHeight(doc: jsPDF, settings: any, pageWidth: number) {
   if (settings.showFooterImage && settings.footerImage) {
     try {
       const properties = doc.getImageProperties(settings.footerImage)
-      const proportionalHeight = pageWidth * (properties.height / properties.width)
-      return Math.max(configuredHeight, Math.min(80, proportionalHeight))
+      if (properties && properties.width && properties.height) {
+        const proportionalHeight = pageWidth * (properties.height / properties.width)
+        return Math.max(configuredHeight, Math.min(60, proportionalHeight))
+      }
+      return configuredHeight
     } catch {
       return configuredHeight
     }
@@ -425,10 +412,10 @@ function getPdfFooterHeight(doc: jsPDF, settings: any, pageWidth: number) {
   return 12
 }
 
-function drawPdfHeader(doc: jsPDF, settings: any, pageWidth: number, left: number, right: number, top: number) {
+function drawPdfHeader(doc: jsPDF, settings: any, pageWidth: number, left: number, right: number) {
   if (!settings.showHeader) return
 
-  const bandHeight = getPdfHeaderHeight(settings)
+  const bandHeight = getPdfHeaderHeight(doc, settings, pageWidth)
   const bandTop = 0
   const contentLeft = left
   const contentRight = pageWidth - right
@@ -436,7 +423,7 @@ function drawPdfHeader(doc: jsPDF, settings: any, pageWidth: number, left: numbe
   if (settings.showHeaderImage && settings.headerImage) {
     doc.setFillColor(255, 255, 255)
     doc.rect(0, bandTop, pageWidth, bandHeight, 'F')
-    addPdfImageCover(doc, settings.headerImage, 0, bandTop, pageWidth, bandHeight)
+    addPdfImageContain(doc, settings.headerImage, 0, bandTop, pageWidth, bandHeight)
   } else {
     doc.setFillColor(247, 247, 247)
     doc.rect(0, bandTop, pageWidth, bandHeight, 'F')
@@ -453,7 +440,7 @@ function drawPdfHeader(doc: jsPDF, settings: any, pageWidth: number, left: numbe
   doc.line(contentLeft, bandHeight, contentRight, bandHeight)
 }
 
-function drawPdfFooter(doc: jsPDF, settings: any, pageWidth: number, pageHeight: number, left: number, right: number) {
+function drawPdfFooter(doc: jsPDF, settings: any, pageWidth: number, pageHeight: number, left: number, right: number, totalPages?: number) {
   if (!settings.showFooter) return
 
   const bandHeight = getPdfFooterHeight(doc, settings, pageWidth)
@@ -473,7 +460,9 @@ function drawPdfFooter(doc: jsPDF, settings: any, pageWidth: number, pageHeight:
     doc.setFontSize(8)
     doc.setTextColor(90, 90, 90)
     doc.text(settings.footerText || 'Generated by Ikibisnis', contentLeft, footerY)
-    doc.text(`Halaman ${doc.getCurrentPageInfo().pageNumber}`, contentRight, footerY, { align: 'right' })
+    const pageNum = doc.getCurrentPageInfo().pageNumber
+    const pageStr = totalPages ? `Halaman ${pageNum} dari ${totalPages}` : `Halaman ${pageNum}`
+    doc.text(pageStr, contentRight, footerY, { align: 'right' })
   }
 
   doc.setDrawColor(220, 220, 220)
@@ -523,27 +512,36 @@ function ensurePdfSectionSpace(
   requiredHeight: number,
   pageWidth: number,
   pageHeight: number,
-  left: number,
-  right: number,
-  top: number,
-  bottom: number
+  contentTop: number,
+  contentBottom: number
 ) {
-  const footerHeight = settings.showFooter ? getPdfFooterHeight(doc, settings, pageWidth) : 0
-  const contentBottom = Math.max(bottom, footerHeight + 4)
   if (currentY + requiredHeight <= pageHeight - contentBottom) return currentY
 
   doc.addPage()
   drawPdfWatermark(doc, settings, pageWidth, pageHeight)
-  drawPdfHeader(doc, settings, pageWidth, left, right, top)
-  drawPdfFooter(doc, settings, pageWidth, pageHeight, left, right)
-  return settings.showHeader ? getPdfHeaderHeight(settings) + 8 : top
+  return contentTop
 }
 
 async function generatePdfPreview(saveFile = false) {
-  if (!store.selectedData) return
-
   generatingPdf.value = true
   try {
+    // Pastikan data detail penawaran dan items sudah ter-load lengkap
+    if (!store.selectedData || !store.selectedData.items || store.selectedData.items.length === 0) {
+      try {
+        const freshRes = await penawaransApi.show(penawaranId)
+        if (freshRes?.data) {
+          store.selectedData = freshRes.data
+        }
+      } catch (loadErr) {
+        console.warn('Gagal memuat ulang data penawaran untuk preview PDF:', loadErr)
+      }
+    }
+
+    if (!store.selectedData) {
+      toast.error('Data penawaran tidak ditemukan.')
+      return
+    }
+
     const [resolvedHeader, resolvedFooter, resolvedWatermark, resolvedSignature] = await Promise.all([
       resolveImageDataUrl(pdfSettings.value.headerImage),
       resolveImageDataUrl(pdfSettings.value.footerImage),
@@ -565,186 +563,195 @@ async function generatePdfPreview(saveFile = false) {
       format: getPdfPageFormat(settings.pageSize)
     })
 
-  const pageWidth = doc.internal.pageSize.getWidth()
-  const pageHeight = doc.internal.pageSize.getHeight()
-  const left = Number(settings.marginLeft) || 14
-  const right = Number(settings.marginRight) || 14
-  const top = Number(settings.marginTop) || 18
-  const bottom = Number(settings.marginBottom) || 18
-  const headerHeight = settings.showHeader ? getPdfHeaderHeight(settings) : 0
-  const footerHeight = settings.showFooter ? getPdfFooterHeight(doc, settings, pageWidth) : 0
-  const contentBottom = Math.max(bottom, footerHeight + 4)
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const left = Number(settings.marginLeft) || 14
+    const right = Number(settings.marginRight) || 14
+    const top = Number(settings.marginTop) || 18
+    const bottom = Number(settings.marginBottom) || 18
+    const headerHeight = settings.showHeader ? getPdfHeaderHeight(doc, settings, pageWidth) : 0
+    const footerHeight = settings.showFooter ? getPdfFooterHeight(doc, settings, pageWidth) : 0
+    const contentTop = settings.showHeader ? headerHeight + 8 : top
+    const contentBottom = Math.max(bottom, footerHeight + 4)
 
-  drawPdfWatermark(doc, settings, pageWidth, pageHeight)
-  drawPdfHeader(doc, settings, pageWidth, left, right, top)
-  drawPdfFooter(doc, settings, pageWidth, pageHeight, left, right)
+    // Background watermark pada halaman 1
+    drawPdfWatermark(doc, settings, pageWidth, pageHeight)
 
-  const contentWidth = pageWidth - left - right
-  const infoY = settings.showHeader ? headerHeight + 8 : top
-  const infoRightX = left + (contentWidth * 0.58)
-  const clientLabel = store.selectedData.perusahaan && store.selectedData.perusahaan !== '-' ? store.selectedData.perusahaan : store.selectedData.client_name
-  const clientLines = doc.splitTextToSize(clientLabel || '-', infoRightX - left - 10).slice(0, 2)
-  const clientAddress = selectedLead.value?.lokasi?.trim() || ''
-  const addressLines = clientAddress
-    ? doc.splitTextToSize(clientAddress, infoRightX - left - 10).slice(0, 2)
-    : []
-  const infoHeight = Math.max(37, 25 + (clientLines.length * 4.4) + (addressLines.length ? 5 + (addressLines.length * 4.4) : 0))
+    const contentWidth = pageWidth - left - right
+    const infoY = contentTop
+    const infoRightX = left + (contentWidth * 0.58)
+    const clientLabel = store.selectedData.perusahaan && store.selectedData.perusahaan !== '-' ? store.selectedData.perusahaan : store.selectedData.client_name
+    const clientLines = doc.splitTextToSize(clientLabel || '-', Math.max(30, infoRightX - left - 10)).slice(0, 2)
+    const clientAddress = selectedLead.value?.lokasi?.trim() || ''
+    const addressLines = clientAddress
+      ? doc.splitTextToSize(clientAddress, Math.max(30, infoRightX - left - 10)).slice(0, 2)
+      : []
+    const infoHeight = Math.max(37, 25 + (clientLines.length * 4.4) + (addressLines.length ? 5 + (addressLines.length * 4.4) : 0))
 
-  doc.setFillColor(250, 251, 252)
-  doc.roundedRect(left, infoY, contentWidth, infoHeight, 2, 2, 'F')
-  doc.setDrawColor(226, 232, 240)
-  doc.roundedRect(left, infoY, contentWidth, infoHeight, 2, 2, 'S')
-  doc.setTextColor(30, 41, 59)
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(14)
-  doc.text(settings.headerTitle || 'PENAWARAN HARGA', pageWidth / 2, infoY + 8, { align: 'center' })
+    doc.setFillColor(250, 251, 252)
+    doc.roundedRect(left, infoY, contentWidth, infoHeight, 2, 2, 'F')
+    doc.setDrawColor(226, 232, 240)
+    doc.roundedRect(left, infoY, contentWidth, infoHeight, 2, 2, 'S')
+    doc.setTextColor(30, 41, 59)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(14)
+    doc.text(settings.headerTitle || 'PENAWARAN HARGA', pageWidth / 2, infoY + 8, { align: 'center' })
 
-  doc.setFontSize(8)
-  doc.setTextColor(100, 116, 139)
-  doc.text('KEPADA', left + 5, infoY + 16)
-  doc.text('NOMOR PENAWARAN', infoRightX, infoY + 16)
-  doc.text('TANGGAL', infoRightX, infoY + 25)
-
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(10)
-  doc.setTextColor(30, 41, 59)
-  doc.text(clientLines, left + 5, infoY + 22)
-  if (addressLines.length) {
-    const addressY = infoY + 22 + (clientLines.length * 4.4) + 3
-    doc.setFont('helvetica', 'normal')
     doc.setFontSize(8)
     doc.setTextColor(100, 116, 139)
-    doc.text(addressLines, left + 5, addressY)
-  }
-  doc.text(store.selectedData.nomor_penawaran || '-', infoRightX, infoY + 21)
-  doc.text(store.selectedData.tanggal || '-', infoRightX, infoY + 30)
+    doc.text('KEPADA', left + 5, infoY + 16)
+    doc.text('NOMOR PENAWARAN', infoRightX, infoY + 16)
+    doc.text('TANGGAL', infoRightX, infoY + 25)
 
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
-  doc.setTextColor(100, 116, 139)
-  doc.text('BERLAKU SAMPAI', infoRightX + 45, infoY + 25)
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(10)
-  doc.setTextColor(30, 41, 59)
-  doc.text(store.selectedData.valid_until || '-', infoRightX + 45, infoY + 30)
-
-  const introText = (settings.documentIntro || '').trim() || 'Bersama ini kami sampaikan penawaran harga untuk kebutuhan berikut.'
-  const introLines = doc.splitTextToSize(introText, contentWidth)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9.5)
-  doc.setTextColor(51, 65, 85)
-  const introY = infoY + infoHeight + 9
-  doc.text(introLines, left, introY)
-
-  const rows = (store.selectedData.items || []).map((item, idx) => [
-    String(idx + 1),
-    item.nama_item,
-    String(item.qty),
-    `Rp ${Math.round(Number(item.harga_satuan)).toLocaleString('id-ID')}`,
-    `Rp ${Math.round(Number(item.total_harga)).toLocaleString('id-ID')}`
-  ])
-
-  const tableHeadingY = introY + (introLines.length * 5) + 6
-  drawPdfSectionHeading(doc, 'RINCIAN PENAWARAN', left, tableHeadingY, contentWidth)
-  const tableStartY = tableHeadingY + 10
-  autoTable(doc, {
-    startY: tableStartY,
-    margin: { left, right, top: settings.showHeader ? headerHeight + 8 : top, bottom: contentBottom },
-    head: [['No', 'Nama Item', 'Qty', 'Harga Satuan', 'Total']],
-    body: rows,
-    theme: 'grid',
-    styles: {
-      fontSize: Number(settings.fontSize) || 10,
-      cellPadding: 2,
-      overflow: 'linebreak',
-      valign: 'middle'
-    },
-    headStyles: { fillColor: [42, 52, 64], textColor: [255, 255, 255], fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [246, 246, 246] },
-    didDrawPage: (_data) => {
-      drawPdfWatermark(doc, settings, pageWidth, pageHeight)
-      drawPdfHeader(doc, settings, pageWidth, left, right, top)
-      drawPdfFooter(doc, settings, pageWidth, pageHeight, left, right)
-    }
-  })
-
-  const finalY = (doc as any).lastAutoTable?.finalY || infoY + 80
-  let sectionY = ensurePdfSectionSpace(doc, settings, finalY + 14, 40, pageWidth, pageHeight, left, right, top, bottom)
-  const summaryX = pageWidth - right - 72
-  doc.setFillColor(248, 250, 252)
-  doc.roundedRect(summaryX, sectionY - 7, 72, 36, 2, 2, 'F')
-  doc.setDrawColor(203, 213, 225)
-  doc.roundedRect(summaryX, sectionY - 7, 72, 36, 2, 2, 'S')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(9)
-  doc.setTextColor(71, 85, 105)
-  doc.text('Subtotal', summaryX + 4, sectionY)
-  doc.text(`Rp ${Math.round(Number(store.selectedData.subtotal || 0)).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY, { align: 'right' })
-  doc.text('Pajak', summaryX + 4, sectionY + 8)
-  doc.text(`Rp ${Math.round(Number(store.selectedData.pajak || 0)).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY + 8, { align: 'right' })
-  doc.text('Diskon', summaryX + 4, sectionY + 16)
-  doc.text(`Rp ${Math.round(Number(store.selectedData.diskon || 0)).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY + 16, { align: 'right' })
-  doc.setDrawColor(203, 213, 225)
-  doc.line(summaryX + 4, sectionY + 20, pageWidth - right - 4, sectionY + 20)
-  doc.setFont('helvetica', 'bold')
-  doc.setTextColor(15, 23, 42)
-  doc.text('Grand Total', summaryX + 4, sectionY + 26)
-  doc.text(`Rp ${Math.round(Number(store.selectedData.total_harga || 0)).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY + 26, { align: 'right' })
-  sectionY += 42
-
-  if (settings.showScopeOfWork) {
-    const scopeDraft = (settings.scopeOfWork || '').trim()
-    const scopeLines = scopeDraft
-      ? scopeDraft.split(/\n/)
-      : (store.selectedData.items || []).map((item) => `- ${item.nama_item}${item.deskripsi ? `: ${item.deskripsi}` : ''}`)
-    const scopeBlock = scopeLines.flatMap(line => doc.splitTextToSize(line, pageWidth - left - right - 4))
-    sectionY = ensurePdfSectionSpace(doc, settings, sectionY, scopeBlock.length * 4.5 + 18, pageWidth, pageHeight, left, right, top, bottom)
-    drawPdfSectionHeading(doc, 'SCOPE OF WORK', left, sectionY, contentWidth)
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(9)
-    doc.setTextColor(51, 65, 85)
-    doc.text(scopeBlock, left + 4, sectionY + 13)
-    sectionY += scopeBlock.length * 4.5 + 18
-  }
-
-  if (settings.showTerms) {
-    const termsText = (settings.termsText || '').trim() || '1. Harga berlaku sesuai kesepakatan.\n2. Pembayaran mengikuti jadwal yang disepakati.\n3. Dokumen ini merupakan lampiran resmi dari penawaran.'
-    const termsLines = termsText.split(/\n/).flatMap(line => doc.splitTextToSize(line, pageWidth - left - right - 4))
-    sectionY = ensurePdfSectionSpace(doc, settings, sectionY, termsLines.length * 4.5 + 18, pageWidth, pageHeight, left, right, top, bottom)
-    drawPdfSectionHeading(doc, 'TERMS & CONDITIONS', left, sectionY, contentWidth)
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(9)
-    doc.setTextColor(51, 65, 85)
-    doc.text(termsLines, left + 4, sectionY + 13)
-    sectionY += termsLines.length * 4.5 + 20
-  }
-
-  if (settings.showSignature) {
-    const sigY = ensurePdfSectionSpace(doc, settings, sectionY, 42, pageWidth, pageHeight, left, right, top, bottom)
-    const signatureX = pageWidth - right - 56
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(9)
-    doc.setTextColor(51, 65, 85)
-    doc.text('Hormat kami,', signatureX, sigY)
-    doc.setDrawColor(200, 200, 200)
-    doc.line(signatureX, sigY + 26, pageWidth - right, sigY + 26)
-    if (settings.signatureImage) {
-      addPdfImageContain(doc, settings.signatureImage, signatureX + 10, sigY + 4, 36, 16)
-    }
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(10)
     doc.setTextColor(30, 41, 59)
-    doc.text(settings.signatureName || 'PT Ikibisnis', signatureX + 28, sigY + 32, { align: 'center' })
+    doc.text(clientLines, left + 5, infoY + 22)
+    if (addressLines.length) {
+      const addressY = infoY + 22 + (clientLines.length * 4.4) + 3
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8)
+      doc.setTextColor(100, 116, 139)
+      doc.text(addressLines, left + 5, addressY)
+    }
+    doc.text(store.selectedData.nomor_penawaran || '-', infoRightX, infoY + 21)
+    doc.text(store.selectedData.tanggal || '-', infoRightX, infoY + 30)
+
     doc.setFont('helvetica', 'normal')
-    doc.setFontSize(9)
+    doc.setFontSize(8)
     doc.setTextColor(100, 116, 139)
-    doc.text(settings.signatureTitle || 'Direksi / Manager', signatureX + 28, sigY + 38, { align: 'center' })
-  }
+    doc.text('BERLAKU SAMPAI', infoRightX + 45, infoY + 25)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(30, 41, 59)
+    doc.text(store.selectedData.valid_until || '-', infoRightX + 45, infoY + 30)
+
+    const introText = (settings.documentIntro || '').trim() || 'Bersama ini kami sampaikan penawaran harga untuk kebutuhan berikut.'
+    const introLines = doc.splitTextToSize(introText, contentWidth)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9.5)
+    doc.setTextColor(51, 65, 85)
+    const introY = infoY + infoHeight + 9
+    doc.text(introLines, left, introY)
+
+    const rows = (store.selectedData.items || []).map((item, idx) => [
+      String(idx + 1),
+      item.nama_item || '-',
+      String(item.qty || 1),
+      `Rp ${Math.round(Number(item.harga_satuan) || 0).toLocaleString('id-ID')}`,
+      `Rp ${Math.round(Number(item.total_harga) || 0).toLocaleString('id-ID')}`
+    ])
+
+    const tableHeadingY = introY + (introLines.length * 5) + 6
+    drawPdfSectionHeading(doc, 'RINCIAN PENAWARAN', left, tableHeadingY, contentWidth)
+    const tableStartY = tableHeadingY + 10
+    autoTable(doc, {
+      startY: tableStartY,
+      margin: { left, right, top: contentTop, bottom: contentBottom },
+      head: [['No', 'Nama Item', 'Qty', 'Harga Satuan', 'Total']],
+      body: rows,
+      theme: 'grid',
+      styles: {
+        fontSize: Number(settings.fontSize) || 10,
+        cellPadding: 2,
+        overflow: 'linebreak',
+        valign: 'middle'
+      },
+      headStyles: { fillColor: [42, 52, 64], textColor: [255, 255, 255], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [246, 246, 246] },
+      willDrawPage: (data) => {
+        if (data.pageNumber > 1) {
+          drawPdfWatermark(doc, settings, pageWidth, pageHeight)
+        }
+      }
+    })
+
+    const finalY = (doc as any).lastAutoTable?.finalY || infoY + 80
+    let sectionY = ensurePdfSectionSpace(doc, settings, finalY + 14, 40, pageWidth, pageHeight, contentTop, contentBottom)
+    const summaryX = pageWidth - right - 72
+    doc.setFillColor(248, 250, 252)
+    doc.roundedRect(summaryX, sectionY - 7, 72, 36, 2, 2, 'F')
+    doc.setDrawColor(203, 213, 225)
+    doc.roundedRect(summaryX, sectionY - 7, 72, 36, 2, 2, 'S')
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(9)
+    doc.setTextColor(71, 85, 105)
+    doc.text('Subtotal', summaryX + 4, sectionY)
+    doc.text(`Rp ${Math.round(Number(store.selectedData.subtotal) || 0).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY, { align: 'right' })
+    doc.text('Pajak', summaryX + 4, sectionY + 8)
+    doc.text(`Rp ${Math.round(Number(store.selectedData.pajak) || 0).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY + 8, { align: 'right' })
+    doc.text('Diskon', summaryX + 4, sectionY + 16)
+    doc.text(`Rp ${Math.round(Number(store.selectedData.diskon) || 0).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY + 16, { align: 'right' })
+    doc.setDrawColor(203, 213, 225)
+    doc.line(summaryX + 4, sectionY + 20, pageWidth - right - 4, sectionY + 20)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(15, 23, 42)
+    doc.text('Grand Total', summaryX + 4, sectionY + 26)
+    doc.text(`Rp ${Math.round(Number(store.selectedData.total_harga) || 0).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY + 26, { align: 'right' })
+    sectionY += 42
+
+    if (settings.showScopeOfWork) {
+      const scopeDraft = (settings.scopeOfWork || '').trim()
+      const scopeLines = scopeDraft
+        ? scopeDraft.split(/\n/)
+        : (store.selectedData.items || []).map((item) => `- ${item.nama_item}${item.deskripsi ? `: ${item.deskripsi}` : ''}`)
+      const scopeBlock = scopeLines.flatMap(line => doc.splitTextToSize(line, pageWidth - left - right - 4))
+      sectionY = ensurePdfSectionSpace(doc, settings, sectionY, scopeBlock.length * 4.5 + 18, pageWidth, pageHeight, contentTop, contentBottom)
+      drawPdfSectionHeading(doc, 'SCOPE OF WORK', left, sectionY, contentWidth)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(51, 65, 85)
+      doc.text(scopeBlock, left + 4, sectionY + 13)
+      sectionY += scopeBlock.length * 4.5 + 18
+    }
+
+    if (settings.showTerms) {
+      const termsText = (settings.termsText || '').trim() || '1. Harga berlaku sesuai kesepakatan.\n2. Pembayaran mengikuti jadwal yang disepakati.\n3. Dokumen ini merupakan lampiran resmi dari penawaran.'
+      const termsLines = termsText.split(/\n/).flatMap(line => doc.splitTextToSize(line, pageWidth - left - right - 4))
+      sectionY = ensurePdfSectionSpace(doc, settings, sectionY, termsLines.length * 4.5 + 18, pageWidth, pageHeight, contentTop, contentBottom)
+      drawPdfSectionHeading(doc, 'TERMS & CONDITIONS', left, sectionY, contentWidth)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(51, 65, 85)
+      doc.text(termsLines, left + 4, sectionY + 13)
+      sectionY += termsLines.length * 4.5 + 20
+    }
+
+    if (settings.showSignature) {
+      const sigY = ensurePdfSectionSpace(doc, settings, sectionY, 42, pageWidth, pageHeight, contentTop, contentBottom)
+      const signatureX = pageWidth - right - 56
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(51, 65, 85)
+      doc.text('Hormat kami,', signatureX, sigY)
+      doc.setDrawColor(200, 200, 200)
+      doc.line(signatureX, sigY + 26, pageWidth - right, sigY + 26)
+      if (settings.signatureImage) {
+        addPdfImageContain(doc, settings.signatureImage, signatureX + 10, sigY + 4, 36, 16)
+      }
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(10)
+      doc.setTextColor(30, 41, 59)
+      doc.text(settings.signatureName || 'PT Ikibisnis', signatureX + 28, sigY + 32, { align: 'center' })
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(100, 116, 139)
+      doc.text(settings.signatureTitle || 'Direksi / Manager', signatureX + 28, sigY + 38, { align: 'center' })
+    }
+
+    // Render Header & Footer pada setiap halaman di layer atas (margin area)
+    const totalPages = doc.getNumberOfPages()
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i)
+      drawPdfHeader(doc, settings, pageWidth, left, right)
+      drawPdfFooter(doc, settings, pageWidth, pageHeight, left, right, totalPages)
+    }
 
     if (saveFile) {
       doc.save(`${(store.selectedData.nomor_penawaran || 'penawaran').replace(/\s+/g, '_')}.pdf`)
     } else {
-      const pdfUrl = doc.output('bloburl')
+      const pdfBlob = doc.output('blob')
+      const pdfUrl = URL.createObjectURL(pdfBlob)
       window.open(pdfUrl, '_blank')
     }
   } catch (err: any) {

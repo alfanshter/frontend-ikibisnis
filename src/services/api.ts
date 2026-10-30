@@ -1031,6 +1031,7 @@ export interface LogPekerjaanFoto {
   id?: number
   url: string
   label?: string
+  keterangan?: string
 }
 
 export interface LogPekerjaanResponse {
@@ -1041,8 +1042,14 @@ export interface LogPekerjaanResponse {
   tim: string[]
   durasi: string | null
   kendala: string | null
+  status_verifikasi?: 'Menunggu Review' | 'Sesuai' | 'Perlu Revisi'
+  catatan_revisi?: string | null
+  verified_by?: number | null
+  verified_at?: string | null
+  verifier?: { id: number; name: string; role?: string } | null
   fotos: LogPekerjaanFoto[]
   created_by: number | null
+  creator?: { id: number; name: string; email?: string; role?: string } | null
   created_at: string
 }
 
@@ -1050,7 +1057,7 @@ export interface LogPekerjaanPayload {
   tanggal: string
   aktivitas: string
   tim?: string[]
-  durasi?: string
+  durasi?: string | number
   kendala?: string
   fotos?: LogPekerjaanFoto[]
 }
@@ -1068,6 +1075,9 @@ export const logPekerjaanApi = {
   },
   delete(proyekId: number, logId: number) {
     return request<{ message: string }>('DELETE', `/proyeks/${proyekId}/log-pekerjaan/${logId}`)
+  },
+  verifikasi(proyekId: number, logId: number, payload: { status_verifikasi: 'Menunggu Review' | 'Sesuai' | 'Perlu Revisi'; catatan_revisi?: string }) {
+    return request<{ message: string; data: LogPekerjaanResponse }>('PATCH', `/proyeks/${proyekId}/log-pekerjaan/${logId}/verifikasi`, payload)
   },
 }
 

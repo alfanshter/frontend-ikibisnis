@@ -183,10 +183,22 @@ export interface TransactionResponse {
   created_at: string
 }
 
+/**
+ * Periode laporan transaksi:
+ * month    → bulan terpilih
+ * semester → semester berjalan (Semester 1 = Jan–Jun, Semester 2 = Jul–Des)
+ * year     → satu tahun penuh
+ */
+export type TransactionPeriod = 'month' | 'semester' | 'year' | 'custom'
+
 export interface TransactionStatsResponse {
   current_period: {
+    period: TransactionPeriod
     month: number
     year: number
+    label: string
+    start_date: string
+    end_date: string
     total_masuk: number
     total_keluar: number
     saldo_bersih: number
@@ -203,7 +215,16 @@ export interface TransactionStatsResponse {
 }
 
 export const transactionsApi = {
-  list(params?: { type?: string; category?: string; month?: number; year?: number; page?: number }) {
+  list(params?: {
+    type?: string
+    category?: string
+    month?: number
+    year?: number
+    period?: TransactionPeriod
+    start_date?: string | null
+    end_date?: string | null
+    page?: number
+  }) {
     const qs = new URLSearchParams()
     if (params) {
       Object.entries(params).forEach(([k, v]) => {
@@ -212,7 +233,13 @@ export const transactionsApi = {
     }
     return request<{ data: TransactionResponse[]; meta: any }>('GET', `/transactions?${qs.toString()}`)
   },
-  stats(params?: { month?: number; year?: number }) {
+  stats(params?: {
+    month?: number
+    year?: number
+    period?: TransactionPeriod
+    start_date?: string | null
+    end_date?: string | null
+  }) {
     const qs = new URLSearchParams()
     if (params) {
       Object.entries(params).forEach(([k, v]) => {

@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
-import { Plus, TrendingUp, TrendingDown, DollarSign, X, ChevronDown, Loader2, Pencil, Trash2 } from '@lucide/vue'
+import {
+  Plus, TrendingUp, TrendingDown, DollarSign, X, ChevronDown, Loader2, Pencil, Trash2,
+  CalendarDays, CalendarRange, Calendar
+} from '@lucide/vue'
 import { useTransactionsStore } from '@/stores/transactions'
-import { leadsApi, type LeadResponse } from '@/services/api'
+import DateRangePicker, { type DateRange } from '@/components/admin/DateRangePicker.vue'
+import { leadsApi, type LeadResponse, type TransactionPeriod } from '@/services/api'
 import { formatRp } from '@/utils/currency'
 
 // ─── Store ─────────────────────────────────────────────────────────────────
@@ -66,6 +70,95 @@ watch(totalPages, (newTotal) => {
     currentPage.value = Math.max(1, newTotal)
   }
 })
+
+// ─── Filter Periode (Bulan / Semester / Tahun) ──────────────────────────────
+const periodOptions: Array<{ value: TransactionPeriod; label: string; icon: typeof Calendar }> = [
+  { value: 'month', label: 'Bulan Ini', icon: CalendarDays },
+  { value: 'semester', label: 'Per Semester', icon: CalendarRange },
+  { value: 'year', label: '1 Tahun', icon: Calendar },
+]
+
+const BULAN_INDO = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+]
+
+/**
+ * Label periode aktif (dari server), dengan fallback lokal saat stats belum termuat.
+ */
+const periodLabel = computed(() => {
+  const fromServer = store.stats?.current_period?.label
+  if (fromServer) return fromServer
+
+  if (hasCustomRange.value) return 'Rentang Tanggal'
+
+  const now = new Date()
+  if (store.period === 'year') return `Tahun ${store.currentYear}`
+  if (store.period === 'semester') {
+    const semester = now.getMonth() + 1 <= 6 ? 1 : 2
+    return `Semester ${semester} ${store.currentYear}`
+  }
+  return `${BULAN_INDO[now.getMonth()]} ${store.currentYear}`
+})
+
+const periodRangeLabel = computed(() => {
+  const range = store.stats?.current_period
+  if (range?.start_date && range?.end_date) {
+    return `${formatTanggalPendek(range.start_date)} – ${formatTanggalPendek(range.end_date)}`
+  }
+  return ''
+})
+
+function formatTanggalPendek(tanggal: string): string {
+  const parts = tanggal.split('-')
+  if (parts.length !== 3) return tanggal
+
+  const year = parts[0] ?? ''
+  const month = BULAN_INDO[parseInt(parts[1] ?? '1', 10) - 1] ?? ''
+  const day = parts[2] ?? ''
+  if (!year || !month || !day) return tanggal
+
+  return `${parseInt(day, 10)} ${month.slice(0, 3)} ${year}`
+}
+
+const chartTitle = computed(() => {
+  if (store.period === 'year') return `Rekap Tahunan ${store.currentYear}`
+  if (store.period === 'semester') return `Rekap ${periodLabel.value}`
+  return 'Rekap 6 Bulan Terakhir'
+})
+
+/**
+ * Rentang tanggal kustom (dipilih melalui DateRangePicker).
+ */
+const dateRange = ref<DateRange>({ start: store.startDate, end: store.endDate })
+
+const hasCustomRange = computed(() => !!(store.startDate && store.endDate))
+
+watch(
+  () => [store.startDate, store.endDate] as const,
+  ([start, end]) => {
+    dateRange.value = { start: start ?? null, end: end ?? null }
+  },
+)
+
+function onRangeChange(range: DateRange) {
+  store.setDateRange(range.start, range.end)
+}
+
+const yearOptions = computed(() => {
+  const current = new Date().getFullYear()
+  return [current + 1, current, current - 1, current - 2, current - 3]
+})
+
+const selectedYear = ref(store.currentYear)
+
+watch(() => store.currentYear, (value) => {
+  selectedYear.value = value
+})
+
+function onYearChange() {
+  store.setYear(selectedYear.value)
+}
 
 // ─── Stats ─────────────────────────────────────────────────────────────────
 const totalMasuk  = computed(() => store.stats?.current_period.total_masuk || 0)
@@ -265,6 +358,42 @@ const executeDelete = async () => {
       </button>
     </div>
 
+    <!-- ── Filter Periode ───────────────────────────────────────────── -->
+    <div class="pb-period-bar">
+      <div class="pb-segment" role="tablist" aria-label="Filter periode pembukuan">
+        <button
+          v-for="opt in periodOptions"
+          :key="opt.value"
+          type="button"
+          role="tab"
+          class="pb-segment-btn"
+          :class="{ active: store.period === opt.value && !hasCustomRange }"
+          :aria-selected="store.period === opt.value && !hasCustomRange"
+          @click="store.setPeriod(opt.value)"
+        >
+          <component :is="opt.icon" :size="14" />
+          <span>{{ opt.label }}</span>
+        </button>
+      </div>
+
+      <div class="pb-period-meta">
+        <DateRangePicker v-model="dateRange" @change="onRangeChange" />
+
+        <div class="pb-range-chip">
+          <CalendarDays :size="14" />
+          <span>{{ periodLabel }}</span>
+          <span v-if="periodRangeLabel" class="pb-range-chip-sub">{{ periodRangeLabel }}</span>
+        </div>
+
+        <div class="pb-year-select-wrap">
+          <select v-model.number="selectedYear" class="pb-year-select" @change="onYearChange">
+            <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
+          </select>
+          <ChevronDown :size="14" class="pb-year-chevron" />
+        </div>
+      </div>
+    </div>
+
     <!-- ── Stat Cards ────────────────────────────────────────────── -->
     <div class="pb-stat-grid">
       <div class="pb-stat-card">
@@ -278,7 +407,7 @@ const executeDelete = async () => {
           <Loader2 v-if="store.statsLoading" :size="24" class="spinner" />
           <template v-else>{{ formatRp(totalMasuk) }}</template>
         </div>
-        <div class="pb-stat-sub">Bulan Ini</div>
+        <div class="pb-stat-sub">{{ periodLabel }}</div>
       </div>
 
       <div class="pb-stat-card">
@@ -292,7 +421,7 @@ const executeDelete = async () => {
           <Loader2 v-if="store.statsLoading" :size="24" class="spinner" />
           <template v-else>{{ formatRp(totalKeluar) }}</template>
         </div>
-        <div class="pb-stat-sub">Bulan Ini</div>
+        <div class="pb-stat-sub">{{ periodLabel }}</div>
       </div>
 
       <div class="pb-stat-card">
@@ -306,14 +435,14 @@ const executeDelete = async () => {
           <Loader2 v-if="store.statsLoading" :size="24" class="spinner" />
           <template v-else>{{ formatRp(saldoBersih) }}</template>
         </div>
-        <div class="pb-stat-sub">Bulan Ini</div>
+        <div class="pb-stat-sub">{{ periodLabel }}</div>
       </div>
     </div>
 
     <!-- ── Bar Chart ─────────────────────────────────────────────── -->
     <div class="chart-card" style="margin-bottom: 24px;">
       <div class="chart-card-header">
-        <h3>Rekap 6 Bulan Terakhir</h3>
+        <h3>{{ chartTitle }}</h3>
       </div>
 
       <div class="bar-chart-wrap">
@@ -748,10 +877,15 @@ const executeDelete = async () => {
   display: flex;
   gap: 4px;
   align-items: flex-end;
+  width: 100%;
+  justify-content: center;
 }
 
 .bar {
-  width: 22px;
+  /* Lebar menyesuaikan agar tetap rapi saat periode tahunan (12 bar) */
+  flex: 1 1 0;
+  max-width: 22px;
+  min-width: 3px;
   border-radius: 4px 4px 0 0;
   transition: height 0.6s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: default;
@@ -1162,5 +1296,138 @@ const executeDelete = async () => {
 .btn-danger:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* ─── Filter Periode (Bulan / Semester / Tahun) ──────────────────────────── */
+.pb-period-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+}
+
+.pb-segment {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.pb-segment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'Inter', sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.pb-segment-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pb-segment-btn.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.28);
+}
+
+.pb-period-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pb-range-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  color: var(--accent-blue);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pb-range-chip-sub {
+  padding-left: 8px;
+  border-left: 1px solid rgba(59, 130, 246, 0.28);
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.pb-year-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.pb-year-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 8px 32px 8px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'Inter', sans-serif;
+  cursor: pointer;
+  transition: border-color 0.18s ease;
+}
+
+.pb-year-select:hover,
+.pb-year-select:focus {
+  border-color: var(--accent-blue);
+  outline: none;
+}
+
+.pb-year-chevron {
+  position: absolute;
+  right: 10px;
+  pointer-events: none;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  .pb-period-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pb-segment {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .pb-segment-btn {
+    justify-content: center;
+    padding: 8px 10px;
+  }
+
+  .pb-period-meta {
+    justify-content: space-between;
+  }
 }
 </style>

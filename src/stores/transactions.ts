@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { transactionsApi, type TransactionResponse, type TransactionStatsResponse } from '@/services/api'
+import { transactionsApi, type TransactionResponse, type TransactionStatsResponse, type TransactionPeriod } from '@/services/api'
 
 export const useTransactionsStore = defineStore('transactions', () => {
   const transactions = ref<TransactionResponse[]>([])
@@ -17,6 +17,11 @@ export const useTransactionsStore = defineStore('transactions', () => {
   // Filter state
   const currentMonth = ref(new Date().getMonth() + 1)
   const currentYear = ref(new Date().getFullYear())
+  const period = ref<TransactionPeriod>('month')
+
+  // Rentang tanggal kustom (date range picker). Jika terisi, menggantikan preset periode.
+  const startDate = ref<string | null>(null)
+  const endDate = ref<string | null>(null)
 
   async function fetchTransactions(params?: { type?: string; category?: string; page?: number }) {
     loading.value = true
@@ -24,8 +29,11 @@ export const useTransactionsStore = defineStore('transactions', () => {
     try {
       const response = await transactionsApi.list({
         ...params,
+        period: period.value,
         month: currentMonth.value,
         year: currentYear.value,
+        start_date: startDate.value,
+        end_date: endDate.value,
         page: params?.page ?? currentPage.value
       })
       transactions.value = response.data
@@ -43,14 +51,54 @@ export const useTransactionsStore = defineStore('transactions', () => {
     statsLoading.value = true
     try {
       stats.value = await transactionsApi.stats({
+        period: period.value,
         month: currentMonth.value,
         year: currentYear.value,
+        start_date: startDate.value,
+        end_date: endDate.value,
       })
     } catch (e: any) {
       console.error('Failed to load transaction stats', e)
     } finally {
       statsLoading.value = false
     }
+  }
+
+  /**
+   * Ganti periode laporan (bulan / semester / tahun) lalu muat ulang data.
+   */
+  async function setPeriod(value: TransactionPeriod) {
+    // Memilih preset periode akan membersihkan rentang tanggal kustom
+    if (period.value === value && !startDate.value && !endDate.value) return
+    period.value = value
+    startDate.value = null
+    endDate.value = null
+    currentPage.value = 1
+    await Promise.all([fetchTransactions(), fetchStats()])
+  }
+
+  /**
+   * Terapkan rentang tanggal kustom (hasil date range picker).
+   */
+  async function setDateRange(start: string | null, end: string | null) {
+    const sameRange = startDate.value === start && endDate.value === end
+    if (sameRange && period.value === 'custom') return
+
+    startDate.value = start
+    endDate.value = end
+    period.value = start && end ? 'custom' : period.value
+    currentPage.value = 1
+    await Promise.all([fetchTransactions(), fetchStats()])
+  }
+
+  /**
+   * Ganti tahun acuan (untuk periode semester & tahunan).
+   */
+  async function setYear(value: number) {
+    if (currentYear.value === value) return
+    currentYear.value = value
+    currentPage.value = 1
+    await Promise.all([fetchTransactions(), fetchStats()])
   }
 
   async function addTransaction(data: { type: string; name: string; date: string; category?: string; proyekId?: string; amount: number }) {
@@ -100,6 +148,12 @@ export const useTransactionsStore = defineStore('transactions', () => {
     total,
     currentMonth,
     currentYear,
+    period,
+    startDate,
+    endDate,
+    setPeriod,
+    setDateRange,
+    setYear,
     fetchTransactions,
     fetchStats,
     addTransaction,

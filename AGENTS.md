@@ -128,6 +128,33 @@ export const proyeksApi = {
 
 ---
 
+## 5.1 Komponen Reusable di `components/admin/`
+
+| Komponen | Fungsi |
+|---|---|
+| `DateRangePicker.vue` | Date range picker kustom (tanpa library): pilih tanggal awal → tanggal akhir, plus preset cepat (7 Hari, 30 Hari, Bulan Ini, Bulan Lalu, Semester Ini, Tahun Ini). `v-model` berupa `{ start: string \| null, end: string \| null }`, emit `change` saat range selesai dipilih. |
+
+- Komponen picker/filter **wajib reusable** (dipakai di >1 halaman → taruh di `components/admin/`), bukan ditulis ulang per view.
+- Popup/popover wajib memakai `position: absolute/fixed` + `z-index` di atas modal lain, dan menutup saat klik di luar (`document.addEventListener('click', ...)` + `removeEventListener` di `onBeforeUnmount`).
+
+## 5.2 Kontrak Filter Periode Laporan
+
+Backend menerima parameter periode pada endpoint laporan/transaksi:
+
+| Parameter | Nilai | Keterangan |
+|---|---|---|
+| `period` | `month` \| `semester` \| `year` \| `custom` | Preset periode (default `month`) |
+| `month` | 1–12 | Bulan acuan (menentukan semester aktif) |
+| `year` | tahun | Tahun acuan |
+| `start_date` / `end_date` | `YYYY-MM-DD` | Rentang kustom; bila keduanya diisi, **mengENSEDEHKAN preset** `period` |
+
+Response `current_period` selalu berisi: `period`, `label` (Indonesia), `start_date`, `end_date`, `total_masuk`, `total_keluar`, `saldo_bersih`.
+
+Aturan frontend:
+- Preset & rentang kustom **tidak boleh aktif bersamaan** → memilih preset membersihkan rentang, dan sebaliknya.
+- Label periode & rentang tanggal **selalu diambil dari server** (`current_period.label`), dengan fallback lokal hanya saat data belum termuat.
+- Judul grafik & sub-label kartu statistik wajib mengikuti periode aktif.
+
 ## 6. Aturan View / Component
 
 ### Template & script

@@ -5,9 +5,10 @@ import AdminLayout from '@/layouts/AdminLayout.vue'
 import { usePenawaranStore } from '@/stores/penawaran'
 import { leadsApi, partsApi, penawaransApi, pdfSettingsApi, getStorageUrl } from '@/services/api'
 import type { LeadResponse, PartResponse, PenawaranPdfSettings } from '@/services/api'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
-import * as XLSX from 'xlsx'
+// Library berat (jsPDF, jspdf-autotable, xlsx) dimuat on-demand via dynamic
+// import agar bundle awal halaman tetap ringan dan tidak memicu peringatan
+// chunk > 500 kB. Tipe tetap di-import (type-only) untuk anotasi fungsi.
+import type jsPDF from 'jspdf'
 import {
   ChevronRight, Plus, CheckCircle2, FileText, Trash2, Save,
   AlertTriangle, Calendar, User, FileDigit, Box, Download,
@@ -603,6 +604,12 @@ async function generatePdfPreview(saveFile = false) {
   pdfProgressLabel.value = 'Menyiapkan…'
 
   try {
+    // Muat pustaka PDF secara on-demand (hanya saat user meminta generate)
+    const [{ default: JsPDF }, { autoTable }] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ])
+
     await updatePdfProgress(5, 'Menyiapkan data penawaran…')
 
     // Pastikan data detail penawaran dan items sudah ter-load lengkap
@@ -659,7 +666,7 @@ async function generatePdfPreview(saveFile = false) {
       signatureImage: resolvedSignature,
     }
 
-    const doc = new jsPDF({
+    const doc = new JsPDF({
       orientation: settings.orientation as any,
       unit: 'mm',
       format: getPdfPageFormat(settings.pageSize)
@@ -1186,7 +1193,10 @@ function closeImportModal() {
   showImportModal.value = false
 }
 
-function downloadExcelTemplate() {
+async function downloadExcelTemplate() {
+  // Muat SheetJS on-demand (hanya saat user mengunduh template)
+  const XLSX = await import('xlsx')
+
   const headers = [
     'nama_item', 'deskripsi', 'jenis_item', 'qty',
     'harga_modal', 'markup_mode', 'markup_value',
@@ -1224,13 +1234,23 @@ function downloadExcelTemplate() {
 function onImportDrop(e: DragEvent) {
   importDragging.value = false
   const file = e.dataTransfer?.files?.[0]
-  if (file) processImportFile(file)
+  if (file) {
+    processImportFile(file).catch(() => {
+      importError.value = 'Gagal memuat pustaka Excel. Coba muat ulang halaman.'
+      importLoading.value = false
+    })
+  }
 }
 
 function onImportFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
-  if (file) processImportFile(file)
+  if (file) {
+    processImportFile(file).catch(() => {
+      importError.value = 'Gagal memuat pustaka Excel. Coba muat ulang halaman.'
+      importLoading.value = false
+    })
+  }
   input.value = ''
 }
 
@@ -1261,7 +1281,10 @@ function calcHargaSatuan(harga_modal: number, markup_mode: string, markup_value:
   return Math.round(harga_modal * (1 + markup_value / 100))
 }
 
-function processImportFile(file: File) {
+async function processImportFile(file: File) {
+  // Muat SheetJS on-demand (hanya saat user memilih file Excel)
+  const XLSX = await import('xlsx')
+
   const ext = file.name.split('.').pop()?.toLowerCase()
   if (!['xlsx', 'xls', 'csv'].includes(ext || '')) {
     importError.value = 'Format file tidak didukung. Gunakan .xlsx, .xls, atau .csv'

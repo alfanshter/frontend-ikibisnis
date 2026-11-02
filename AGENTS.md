@@ -155,6 +155,31 @@ Aturan frontend:
 - Label periode & rentang tanggal **selalu diambil dari server** (`current_period.label`), dengan fallback lokal hanya saat data belum termuat.
 - Judul grafik & sub-label kartu statistik wajib mengikuti periode aktif.
 
+## 5.3 Library Berat WAJIB Lazy (on-demand)
+
+Pustaka besar **dilarang di-import static** pada halaman yang tidak selalu memakai fiturnya:
+`jspdf`, `jspdf-autotable`, `xlsx`, `chart.js`.
+
+```ts
+// ❌ import statis — membengkakkan bundle awal halaman
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
+import * as XLSX from 'xlsx'
+
+// ✅ type-only (dihapus saat build, nol biaya runtime) + dynamic import saat dipakai
+import type jsPDF from 'jspdf'
+
+const { default: JsPDF } = await import('jspdf')
+const { autoTable } = await import('jspdf-autotable')
+const XLSX = await import('xlsx')
+```
+
+Aturan:
+- Dynamic import dilakukan **di dalam fungsi** yang membutuhkannya, bukan di top-level modul.
+- Fungsi pemanggil wajib `async` dan **wajib ditangani error-nya** (`.catch()` / `try-catch`).
+- Tipe yang dipakai pada anotasi fungsi (mis. `doc: jsPDF`) tetap di-import dengan `import type`.
+- Setelah perubahan, `pnpm run build` **tidak boleh** memunculkan peringatan "chunks are larger than 500 kB".
+
 ## 6. Aturan View / Component
 
 ### Template & script

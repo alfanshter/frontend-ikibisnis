@@ -6,8 +6,8 @@ import {
   Plus, Search, FileText, ChevronDown, X, Trash2, Printer,
   CheckCircle2, Clock, AlertCircle, Building2, Calendar, DollarSign, Download, Send
 } from '@lucide/vue'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
+// Pustaka PDF (jspdf, jspdf-autotable) dimuat on-demand via dynamic import
+// agar bundle awal halaman tetap ringan dan tidak memicu peringatan chunk besar.
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface InvoiceItem {
@@ -354,10 +354,16 @@ const formatDate = (d: string) => {
 }
 
 // ─── Export PDF ───────────────────────────────────────────────────────────────
-const exportToPdf = () => {
+const exportToPdf = async () => {
   if (!selected.value) return
 
-  const doc = new jsPDF()
+  // Muat pustaka PDF secara on-demand (hanya saat user meminta export)
+  const [{ default: JsPDF }, { autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ])
+
+  const doc = new JsPDF()
   const inv = selected.value
 
   // Header

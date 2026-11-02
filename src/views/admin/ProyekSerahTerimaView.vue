@@ -3,8 +3,8 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import SignaturePad from '@/components/SignaturePad.vue'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
+// Pustaka PDF (jspdf, jspdf-autotable) dimuat on-demand via dynamic import
+// agar bundle awal halaman tetap ringan dan tidak memicu peringatan chunk besar.
 import { 
   ArrowLeft, Plus, CheckCircle2, FileText, Image as ImageIcon,
   Trash2, Download, AlertCircle, Save
@@ -228,9 +228,15 @@ const completeHandover = async () => {
 }
 
 // Generate BAST PDF
-const generatePDF = () => {
+const generatePDF = async () => {
   if (!stData.value || !proyek.value) return
-  const doc = new jsPDF()
+
+  // Muat pustaka PDF secara on-demand (hanya saat user meminta export)
+  const [{ default: JsPDF }, { autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ])
+  const doc = new JsPDF()
   const d = stData.value
   
   doc.setFontSize(16)

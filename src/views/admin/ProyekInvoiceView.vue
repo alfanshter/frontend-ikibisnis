@@ -8,8 +8,8 @@ import {
   CheckCircle2, Clock, AlertCircle, Building2, Calendar, DollarSign, RefreshCw,
   BookOpen, CreditCard
 } from '@lucide/vue'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
+// Pustaka PDF (jspdf, jspdf-autotable) dimuat on-demand via dynamic import
+// agar bundle awal halaman tetap ringan dan tidak memicu peringatan chunk besar.
 import {
   proyeksApi,
   proyekInvoicesApi,
@@ -268,9 +268,15 @@ const markLunas = async (id: number) => {
 }
 
 // ─── Export PDF ───────────────────────────────────────────────────────────────
-const exportToPdf = () => {
+const exportToPdf = async () => {
   if (!selected.value || !proyek.value) return
-  const doc = new jsPDF()
+
+  // Muat pustaka PDF secara on-demand (hanya saat user meminta export)
+  const [{ default: JsPDF }, { autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ])
+  const doc = new JsPDF()
   const inv = selected.value
   doc.setFontSize(20); doc.setTextColor(59, 130, 246); doc.text('INVOICE', 14, 22)
   doc.setFontSize(10); doc.setTextColor(100)

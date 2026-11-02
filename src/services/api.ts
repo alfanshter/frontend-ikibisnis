@@ -1576,6 +1576,15 @@ export function getStorageUrl(url: string | null | undefined): string {
   return `${base}${url.startsWith('/') ? '' : '/'}${url}`
 }
 
+/**
+ * Bangun URL absolut menuju endpoint API.
+ * Dipakai untuk aset yang perlu diambil langsung (mis. gambar pada PDF).
+ */
+export function getApiUrl(path: string): string {
+  if (!path) return BASE_URL
+  return `${BASE_URL}${path.startsWith('/') ? path : `/${path}`}`
+}
+
 export const pdfSettingsApi = {
   getPenawaranPdf: async (): Promise<{ success: boolean; data: Partial<PenawaranPdfSettings> | null }> => {
     return request<{ success: boolean; data: Partial<PenawaranPdfSettings> | null }>('GET', '/settings/penawaran-pdf')
@@ -1591,5 +1600,12 @@ export const pdfSettingsApi = {
   },
   deleteImage: async (type: 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage'): Promise<{ success: boolean; message: string; type: string; data: PenawaranPdfSettings }> => {
     return request<{ success: boolean; message: string; type: string; data: PenawaranPdfSettings }>('DELETE', '/settings/penawaran-pdf/image', { type })
-  }
+  },
+  /**
+   * URL gambar pengaturan PDF (disajikan backend sebagai file).
+   * Diambil via API karena frontend & API berada di domain berbeda,
+   * sehingga link storage mentah bisa tertahan CORS saat di-fetch.
+   */
+  imageUrl: (type: 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage'): string =>
+    getApiUrl(`/settings/penawaran-pdf/image/${type}`),
 }

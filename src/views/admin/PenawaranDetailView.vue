@@ -75,6 +75,15 @@ const uploadingPdfKey = ref<string | null>(null)
 const generatingPdf = ref(false)
 const pdfSettings = ref({ ...defaultPdfSettings })
 
+// ─── Progress Generate PDF ───────────────────────────────────────────────────
+const showPdfProgress = ref(false)
+const pdfProgress = ref(0)
+const pdfProgressLabel = ref('')
+
+// Fallback preview PDF di dalam aplikasi (dipakai bila browser memblokir popup)
+const showPdfPreviewModal = ref(false)
+const pdfPreviewUrl = ref('')
+
 // ─── Import Excel State ────────────────────────────────────────────────────
 const showImportModal = ref(false)
 const importDragging = ref(false)
@@ -274,24 +283,57 @@ async function removePdfImage(key: 'headerImage' | 'footerImage' | 'watermarkIma
   }
 }
 
-async function resolveImageDataUrl(urlOrData: string): Promise<string> {
+type PdfImageKey = 'headerImage' | 'footerImage' | 'watermarkImage' | 'signatureImage'
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onloadend = () => resolve((reader.result as string) || '')
+    reader.onerror = () => resolve('')
+    reader.readAsDataURL(blob)
+  })
+}
+
+/**
+ * Konversi URL gambar settings menjadi Data URL agar bisa disisipkan ke jsPDF.
+ *
+ * Sumber gambar dicoba berurutan:
+ * 1. Endpoint API — lintas domain aman (CORS) dan tidak bergantung APP_URL/symlink storage
+ * 2. URL storage langsung — fallback
+ *
+ * Gambar yang gagal dimuat dikembalikan sebagai string kosong supaya pemanggil
+ * bisa memberi peringatan ke user (bukan diam-diam gagal di dalam PDF).
+ */
+async function resolveImageDataUrl(urlOrData: string, key: PdfImageKey): Promise<string> {
   if (!urlOrData) return ''
   if (urlOrData.startsWith('data:image/')) return urlOrData
 
-  const fullUrl = getStorageUrl(urlOrData)
-  try {
-    const res = await fetch(fullUrl)
-    const blob = await res.blob()
-    return new Promise((resolve) => {
-      const reader = new FileReader()
-      reader.onloadend = () => resolve((reader.result as string) || '')
-      reader.onerror = () => resolve('')
-      reader.readAsDataURL(blob)
-    })
-  } catch (err) {
-    console.error('Gagal mengonversi gambar ke Data URL untuk PDF:', fullUrl, err)
-    return ''
+  const candidates = [pdfSettingsApi.imageUrl(key), getStorageUrl(urlOrData)]
+
+  for (const url of candidates) {
+    if (!url) continue
+    try {
+      const res = await fetch(url, { mode: 'cors', credentials: 'omit' })
+      if (!res.ok) continue
+
+      const blob = await res.blob()
+      if (!blob.type.startsWith('image/')) continue
+
+      const dataUrl = await blobToDataUrl(blob)
+      if (!dataUrl) continue
+
+      // jsPDF hanya mendukung PNG & JPEG → konversi bila perlu (webp/gif/dsb)
+      if (blob.type !== 'image/png' && blob.type !== 'image/jpeg') {
+        return await normalizePdfImageData(dataUrl, 'image/png')
+      }
+      return dataUrl
+    } catch (err) {
+      console.warn(`Gagal memuat gambar ${key} dari ${url}:`, err)
+    }
   }
+
+  console.warn(`Gambar ${key} tidak dapat dimuat untuk PDF.`)
+  return ''
 }
 
 function getPdfPageFormat(size: string) {
@@ -326,12 +368,20 @@ function normalizePdfImageData(dataUrl: string, mimeType: 'image/png' = 'image/p
   })
 }
 
+/**
+ * Deteksi format gambar dari Data URL.
+ * jsPDF hanya mendukung PNG & JPEG — format lain harus dikonversi lebih dulu.
+ */
+function detectPdfImageFormat(dataUrl: string): 'PNG' | 'JPEG' {
+  if (dataUrl.startsWith('data:image/jpeg') || dataUrl.startsWith('data:image/jpg')) return 'JPEG'
+  return 'PNG'
+}
+
 function addPdfImage(doc: jsPDF, imageData: string, x: number, y: number, width: number, height: number, opacity = 1) {
   if (!imageData) return
 
   try {
-    let format: 'PNG' | 'JPEG' = 'PNG'
-    if (imageData.startsWith('data:image/jpeg') || imageData.startsWith('data:image/jpg')) format = 'JPEG'
+    const format = detectPdfImageFormat(imageData)
 
     if (opacity < 1 && 'GState' in doc) {
       const gState = new (doc as any).GState({ opacity })
@@ -341,8 +391,9 @@ function addPdfImage(doc: jsPDF, imageData: string, x: number, y: number, width:
       return
     }
     doc.addImage(imageData, format, x, y, width, height)
-  } catch {
-    // Ignore invalid image data silently
+  } catch (err) {
+    // Jangan ditelan diam-diam: gambar yang gagal sisip akan hilang dari PDF
+    console.warn('Gagal menyisipkan gambar ke PDF:', err)
   }
 }
 
@@ -522,9 +573,38 @@ function ensurePdfSectionSpace(
   return contentTop
 }
 
+/**
+ * Update persentase progres lalu menunggu browser selesai repaint,
+ * agar angka persen yang tampil benar-benar terlihat oleh user.
+ */
+async function updatePdfProgress(percent: number, label: string) {
+  pdfProgress.value = Math.min(100, Math.max(0, Math.round(percent)))
+  pdfProgressLabel.value = label
+
+  // Tunggu browser selesai repaint agar persentase benar-benar terlihat.
+  // Fallback timeout dipakai karena requestAnimationFrame tidak berjalan
+  // pada tab yang tidak aktif (mis. saat tab lain mengambil fokus).
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    requestAnimationFrame(() => requestAnimationFrame(finish))
+    setTimeout(finish, 120)
+  })
+}
+
 async function generatePdfPreview(saveFile = false) {
   generatingPdf.value = true
+  showPdfProgress.value = true
+  pdfProgress.value = 0
+  pdfProgressLabel.value = 'Menyiapkan…'
+
   try {
+    await updatePdfProgress(5, 'Menyiapkan data penawaran…')
+
     // Pastikan data detail penawaran dan items sudah ter-load lengkap
     if (!store.selectedData || !store.selectedData.items || store.selectedData.items.length === 0) {
       try {
@@ -542,12 +622,34 @@ async function generatePdfPreview(saveFile = false) {
       return
     }
 
+    await updatePdfProgress(18, 'Memuat konfigurasi & gambar PDF…')
+
     const [resolvedHeader, resolvedFooter, resolvedWatermark, resolvedSignature] = await Promise.all([
-      resolveImageDataUrl(pdfSettings.value.headerImage),
-      resolveImageDataUrl(pdfSettings.value.footerImage),
-      resolveImageDataUrl(pdfSettings.value.watermarkImage),
-      resolveImageDataUrl(pdfSettings.value.signatureImage),
+      resolveImageDataUrl(pdfSettings.value.headerImage, 'headerImage'),
+      resolveImageDataUrl(pdfSettings.value.footerImage, 'footerImage'),
+      resolveImageDataUrl(pdfSettings.value.watermarkImage, 'watermarkImage'),
+      resolveImageDataUrl(pdfSettings.value.signatureImage, 'signatureImage'),
     ])
+
+    // Beri tahu user bila ada gambar setting yang gagal dimuat (agar tidak hilang tanpa jejak)
+    const missingImages: string[] = []
+    if (pdfSettings.value.showSignature && pdfSettings.value.signatureImage && !resolvedSignature) {
+      missingImages.push('tanda tangan')
+    }
+    if (pdfSettings.value.showHeaderImage && pdfSettings.value.headerImage && !resolvedHeader) {
+      missingImages.push('kop surat')
+    }
+    if (pdfSettings.value.showFooterImage && pdfSettings.value.footerImage && !resolvedFooter) {
+      missingImages.push('footer')
+    }
+    if (pdfSettings.value.showWatermarkImage && pdfSettings.value.watermarkImage && !resolvedWatermark) {
+      missingImages.push('watermark')
+    }
+    if (missingImages.length > 0) {
+      toast.warning(`Gambar ${missingImages.join(', ')} gagal dimuat sehingga tidak dicantumkan pada PDF.`)
+    }
+
+    await updatePdfProgress(35, 'Menyusun dokumen PDF…')
 
     const settings = {
       ...pdfSettings.value,
@@ -645,6 +747,7 @@ async function generatePdfPreview(saveFile = false) {
     const tableHeadingY = introY + (introLines.length * 5) + 6
     drawPdfSectionHeading(doc, 'RINCIAN PENAWARAN', left, tableHeadingY, contentWidth)
     const tableStartY = tableHeadingY + 10
+    await updatePdfProgress(55, 'Menyusun tabel rincian item…')
     autoTable(doc, {
       startY: tableStartY,
       margin: { left, right, top: contentTop, bottom: contentBottom },
@@ -665,6 +768,8 @@ async function generatePdfPreview(saveFile = false) {
         }
       }
     })
+
+    await updatePdfProgress(70, 'Menghitung subtotal, pajak & diskon…')
 
     const finalY = (doc as any).lastAutoTable?.finalY || infoY + 80
     let sectionY = ensurePdfSectionSpace(doc, settings, finalY + 14, 40, pageWidth, pageHeight, contentTop, contentBottom)
@@ -689,6 +794,8 @@ async function generatePdfPreview(saveFile = false) {
     doc.text('Grand Total', summaryX + 4, sectionY + 26)
     doc.text(`Rp ${Math.round(Number(store.selectedData.total_harga) || 0).toLocaleString('id-ID')}`, pageWidth - right - 4, sectionY + 26, { align: 'right' })
     sectionY += 42
+
+    await updatePdfProgress(80, 'Menambahkan ruang lingkup & syarat…')
 
     if (settings.showScopeOfWork) {
       const scopeDraft = (settings.scopeOfWork || '').trim()
@@ -717,6 +824,8 @@ async function generatePdfPreview(saveFile = false) {
       sectionY += termsLines.length * 4.5 + 20
     }
 
+    await updatePdfProgress(88, 'Menambahkan tanda tangan…')
+
     if (settings.showSignature) {
       const sigY = ensurePdfSectionSpace(doc, settings, sectionY, 42, pageWidth, pageHeight, contentTop, contentBottom)
       const signatureX = pageWidth - right - 56
@@ -739,6 +848,8 @@ async function generatePdfPreview(saveFile = false) {
       doc.text(settings.signatureTitle || 'Direksi / Manager', signatureX + 28, sigY + 38, { align: 'center' })
     }
 
+    await updatePdfProgress(93, 'Menerapkan kop & footer…')
+
     // Render Header & Footer pada setiap halaman di layer atas (margin area)
     const totalPages = doc.getNumberOfPages()
     for (let i = 1; i <= totalPages; i++) {
@@ -748,17 +859,46 @@ async function generatePdfPreview(saveFile = false) {
     }
 
     if (saveFile) {
+      await updatePdfProgress(97, 'Menyimpan berkas PDF…')
       doc.save(`${(store.selectedData.nomor_penawaran || 'penawaran').replace(/\s+/g, '_')}.pdf`)
+      await updatePdfProgress(100, 'PDF berhasil dibuat')
     } else {
+      await updatePdfProgress(97, 'Menyelesaikan berkas PDF…')
       const pdfBlob = doc.output('blob')
       const pdfUrl = URL.createObjectURL(pdfBlob)
-      window.open(pdfUrl, '_blank')
+
+      // Tab baru dibuka di akhir proses (bukan di awal) agar fokus tetap di
+      // tab aplikasi sehingga progress popup tetap terlihat oleh user.
+      const opened = window.open(pdfUrl, '_blank')
+
+      // Bila browser memblokir popup, tampilkan preview di dalam aplikasi
+      if (!opened) {
+        pdfPreviewUrl.value = pdfUrl
+        showPdfPreviewModal.value = true
+      }
+
+      // Objek URL dibebaskan setelah sempat dibuka browser
+      setTimeout(() => URL.revokeObjectURL(pdfUrl), 60000)
+      await updatePdfProgress(100, opened ? 'Preview PDF siap dibuka' : 'Preview PDF siap (ditampilkan di aplikasi)')
     }
   } catch (err: any) {
     console.error('Error generating PDF:', err)
     toast.error('Gagal membuat preview PDF: ' + (err.message || 'Error'))
   } finally {
     generatingPdf.value = false
+    // Tahan sebentar agar angka 100% sempat terlihat sebelum popup ditutup
+    setTimeout(() => {
+      showPdfProgress.value = false
+      pdfProgress.value = 0
+    }, 700)
+  }
+}
+
+function closePdfPreview() {
+  showPdfPreviewModal.value = false
+  if (pdfPreviewUrl.value) {
+    URL.revokeObjectURL(pdfPreviewUrl.value)
+    pdfPreviewUrl.value = ''
   }
 }
 
@@ -2642,6 +2782,53 @@ const itemTaxPreview = computed(() => {
         </div>
       </div>
     </Teleport>
+
+    <Teleport to="body">
+      <!-- ── Popup Progress Generate PDF ──────────────────────────────────── -->
+      <div v-if="showPdfProgress" class="item-modal-overlay pdf-progress-overlay">
+        <div class="pdf-progress-card">
+          <div class="pdf-progress-head">
+            <div class="pdf-progress-ring-wrap">
+              <svg viewBox="0 0 40 40" class="pdf-progress-ring">
+                <circle class="pdf-progress-ring-track" cx="20" cy="20" r="16" />
+                <circle
+                  class="pdf-progress-ring-bar"
+                  cx="20"
+                  cy="20"
+                  r="16"
+                  :style="{ strokeDashoffset: 100.53 - (100.53 * pdfProgress) / 100 }"
+                />
+              </svg>
+              <span class="pdf-progress-percent">{{ pdfProgress }}%</span>
+            </div>
+
+            <div class="pdf-progress-head-text">
+              <h4>Menyusun Dokumen PDF</h4>
+              <p class="pdf-progress-label">{{ pdfProgressLabel }}</p>
+            </div>
+          </div>
+
+          <div class="pdf-progress-track">
+            <div class="pdf-progress-bar" :style="{ width: pdfProgress + '%' }"></div>
+          </div>
+
+          <p class="pdf-progress-hint">Mohon tunggu sebentar, jangan tutup halaman ini.</p>
+        </div>
+      </div>
+
+      <!-- ── Preview PDF di dalam aplikasi (fallback saat popup diblokir) ─── -->
+      <div v-if="showPdfPreviewModal" class="item-modal-overlay" @click.self="closePdfPreview">
+        <div class="item-modal-card pdf-preview-card">
+          <div class="item-modal-head">
+            <h4><FileText :size="14" /> Preview PDF</h4>
+            <button class="btn-ghost" @click="closePdfPreview">Tutup</button>
+          </div>
+          <div class="item-modal-body pdf-preview-body">
+            <iframe :src="pdfPreviewUrl" class="pdf-preview-frame" title="Preview PDF"></iframe>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </AdminLayout>
 </template>
 
@@ -4267,5 +4454,119 @@ const itemTaxPreview = computed(() => {
   font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+/* ─── Modal Progress Generate PDF (dialog di tengah layar) ────────────────── */
+.pdf-progress-overlay {
+  z-index: 1300;
+}
+
+.pdf-progress-card {
+  width: min(460px, 100%);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45);
+}
+
+.pdf-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.pdf-progress-ring-wrap {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+}
+
+.pdf-progress-ring {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.pdf-progress-ring-track {
+  fill: none;
+  stroke: var(--border-color);
+  stroke-width: 4;
+}
+
+.pdf-progress-ring-bar {
+  fill: none;
+  stroke: var(--accent-blue);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 100.53;
+  transition: stroke-dashoffset 0.35s ease;
+}
+
+.pdf-progress-percent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pdf-progress-head-text {
+  min-width: 0;
+}
+
+.pdf-progress-card h4 {
+  margin: 0 0 3px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.pdf-progress-label {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.pdf-progress-track {
+  margin-top: 16px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border-color);
+  overflow: hidden;
+}
+
+.pdf-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+  transition: width 0.35s ease;
+}
+
+.pdf-progress-hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ─── Preview PDF di dalam aplikasi ──────────────────────────────────────── */
+.pdf-preview-card {
+  width: min(960px, 100%);
+}
+
+.pdf-preview-body {
+  padding: 0;
+  overflow: hidden;
+}
+
+.pdf-preview-frame {
+  display: block;
+  width: 100%;
+  height: 78vh;
+  border: 0;
+  background: #ffffff;
 }
 </style>

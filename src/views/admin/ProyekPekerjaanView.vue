@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import {
   ArrowLeft, Plus, Clock, CheckCircle, AlertTriangle, X, Edit3, Trash2,
@@ -18,6 +19,7 @@ import {
   type UserResponse
 } from '@/services/api'
 
+const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 const proyekId = Number(route.params.id)
@@ -145,10 +147,28 @@ const onUserInputBlur = () => {
 // ── Foto Upload & Caption ──
 const fotoLabels = ['Dokumentasi', 'Before', 'After', 'Progres', 'Kendala']
 
-const handleFotoUpload = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  if (!target.files) return
-  Array.from(target.files).forEach(file => {
+const MAX_FOTO_SIZE = 8 * 1024 * 1024 // 8 MB per file
+const MAX_FOTO_COUNT = 20
+
+/**
+ * Tambahkan foto ke form. Dipakai bersama oleh file input & drag & drop.
+ */
+function addFotos(files: File[]) {
+  if (files.length === 0) return
+
+  const gambar = files.filter(f => f.type.startsWith('image/'))
+  const bukanGambar = files.length - gambar.length
+
+  // Validasi ukuran file
+  const terlaluBesar = gambar.filter(f => f.size > MAX_FOTO_SIZE)
+  const valid = gambar.filter(f => f.size <= MAX_FOTO_SIZE)
+
+  // Batasi jumlah foto agar form tidak overload
+  const sisaKuota = Math.max(0, MAX_FOTO_COUNT - logForm.value.fotos.length)
+  const diterima = valid.slice(0, sisaKuota)
+  const kebanyakan = valid.length - diterima.length
+
+  diterima.forEach(file => {
     logForm.value.fotos.push({
       url: URL.createObjectURL(file),
       label: 'Dokumentasi',
@@ -157,7 +177,65 @@ const handleFotoUpload = (event: Event) => {
       file
     })
   })
+
+  if (diterima.length > 0) {
+    toast.success(`${diterima.length} foto ditambahkan.`)
+  }
+  if (bukanGambar > 0) {
+    toast.warning(`${bukanGambar} file bukan gambar dan dilewati.`)
+  }
+  if (terlaluBesar.length > 0) {
+    toast.error(`${terlaluBesar.length} foto melebihi batas 8 MB dan dilewati.`)
+  }
+  if (kebanyakan > 0) {
+    toast.warning(`Maksimal ${MAX_FOTO_COUNT} foto per log. ${kebanyakan} foto dilewati.`)
+  }
+}
+
+const handleFotoUpload = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  if (!target.files) return
+  addFotos(Array.from(target.files))
   target.value = ''
+}
+
+// ── Drag & Drop ──
+const isDraggingFoto = ref(false)
+// Counter dragenter/dragleave: dragleave ikut terpicu saat menyentuh elemen anak,
+// sehingga jumlah event harus dilacak (bukan hanya boolean).
+const dragDepth = ref(0)
+
+function onDragEnterFoto(e: DragEvent) {
+  e.preventDefault()
+  dragDepth.value++
+  isDraggingFoto.value = true
+}
+
+function onDragOverFoto(e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  isDraggingFoto.value = true
+}
+
+function onDragLeaveFoto(e: DragEvent) {
+  e.preventDefault()
+  dragDepth.value = Math.max(0, dragDepth.value - 1)
+  if (dragDepth.value === 0) {
+    isDraggingFoto.value = false
+  }
+}
+
+function onDropFoto(e: DragEvent) {
+  e.preventDefault()
+  dragDepth.value = 0
+  isDraggingFoto.value = false
+
+  const files = e.dataTransfer?.files
+  if (!files || files.length === 0) return
+
+  addFotos(Array.from(files))
 }
 
 const removeFoto = (idx: number) => {
@@ -768,11 +846,24 @@ const pendingCount = computed(() => logs.value.filter(l => !l.status_verifikasi 
                   <span style="font-size: 11px; color: var(--text-muted);">Setiap foto bisa diberi keterangan</span>
                 </div>
 
-                <!-- Upload trigger button -->
-                <label class="lp-upload-trigger">
+                <!-- Upload trigger + drop zone -->
+                <label
+                  class="lp-upload-trigger"
+                  :class="{ 'is-dragging': isDraggingFoto }"
+                  @dragenter="onDragEnterFoto"
+                  @dragover="onDragOverFoto"
+                  @dragleave="onDragLeaveFoto"
+                  @drop="onDropFoto"
+                >
                   <input type="file" accept="image/*" multiple @change="handleFotoUpload" style="display: none;" />
-                  <ImageIcon :size="18" />
-                  <span><strong>Pilih / Upload Foto</strong> (Before / After / Dokumentasi)</span>
+                  <template v-if="isDraggingFoto">
+                    <ImageIcon :size="18" class="lp-upload-drag-icon" />
+                    <span><strong>Lepaskan foto di sini</strong></span>
+                  </template>
+                  <template v-else>
+                    <ImageIcon :size="18" />
+                    <span><strong>Tarik / Pilih Foto</strong> (Before / After / Dokumentasi)</span>
+                  </template>
                 </label>
 
                 <!-- List foto upload with keterangan -->
@@ -804,7 +895,7 @@ const pendingCount = computed(() => logs.value.filter(l => !l.status_verifikasi 
                   </div>
                 </div>
                 <div v-else class="lp-form-no-foto">
-                  Belum ada foto ditambahkan. Klik tombol di atas untuk upload.
+                  Belum ada foto ditambahkan. Seret foto ke area di atas, atau klik untuk memilih file.
                 </div>
               </div>
             </div>
@@ -1550,6 +1641,23 @@ const pendingCount = computed(() => logs.value.filter(l => !l.status_verifikasi 
   cursor: pointer;
   transition: all 0.2s;
   background: rgba(255, 255, 255, 0.02);
+}
+
+/* State aktif saat foto diseret ke area upload */
+.lp-upload-trigger.is-dragging {
+  border-color: #a78bfa;
+  background: rgba(167, 139, 250, 0.12);
+  color: #c4b5fd;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
+}
+
+.lp-upload-trigger.is-dragging .lp-upload-drag-icon {
+  animation: lp-bounce 0.9s ease-in-out infinite;
+}
+
+@keyframes lp-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 .lp-upload-trigger:hover {
   border-color: #a78bfa;
